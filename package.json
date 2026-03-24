@@ -4,7 +4,12 @@
   "description": "Repositorio para guardar el smoke test automatizado",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "bddgen": "npx bddgen",
+    "test": "npx bddgen && playwright test",
+    "test:trunk": "npx bddgen && playwright test --project='trunk-desktop' --project='trunk-mobile'",
+    "test:staging": "npx bddgen && playwright test --project='staging-desktop' --project='staging-mobile'",
+    "test:preprod": "npx bddgen && playwright test --project='preprod-desktop' --project='preprod-mobile'",
+    "test:prod": "npx bddgen && playwright test --project='prod-desktop' --project='prod-mobile'"
   },
   "repository": {
     "type": "git",
@@ -20,6 +25,7 @@
   "homepage": "https://github.com/imasdev-org/SmoteTest#readme",
   "devDependencies": {
     "@playwright/test": "^1.58.2",
+    "playwright-bdd": "^8.5.0",
     "typescript": "^6.0.2"
   }
 }

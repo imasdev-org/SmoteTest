@@ -1,19 +1,20 @@
 import { defineConfig, devices } from '@playwright/test';
+import { defineBddConfig } from 'playwright-bdd';
 
 /**
- * Smoke Test - Tienda Inglesa
- *
- * Ambientes y plataformas:
- *   Cada ambiente tiene su versión desktop y mobile.
+ * Smoke Test - Tienda Inglesa (BDD)
  *
  * Uso:
- *   npx playwright test                                        # TODOS (8 projects)
- *   npx playwright test --project="trunk-desktop"              # solo trunk desktop
- *   npx playwright test --project="staging-mobile"             # solo staging mobile
- *   npx playwright test --project="*desktop*"                  # todos los desktop
- *   npx playwright test --project="trunk*"                     # trunk desktop + mobile
- *   npx playwright test --project="prod*"                      # prod desktop + mobile
+ *   npx bddgen && npx playwright test                        # todos
+ *   npx playwright test --project="trunk-desktop"             # solo trunk desktop
+ *   npx playwright test --project="*mobile*"                  # todos los mobile
+ *   npx playwright test --project="prod*"                     # prod desktop + mobile
  */
+
+const testDir = defineBddConfig({
+  features: 'features/*.feature',
+  steps: 'features/steps/*.ts',
+});
 
 const environments = [
   { name: 'trunk',   baseURL: 'https://trunk-web.imasdev.com' },
@@ -25,14 +26,16 @@ const environments = [
 const launchOptions = { args: ['--disable-popup-blocking'] };
 
 export default defineConfig({
-  testDir: './tests',
+  testDir,
   fullyParallel: false,
-  retries: 0,
+  retries: process.env.CI ? 2 : 0,
   workers: 1,
-  reporter: [['list'], ['html', { open: 'never' }]],
+  reporter: process.env.CI
+    ? [['html', { open: 'never' }], ['junit', { outputFile: 'test-results/junit-results.xml' }]]
+    : [['list'], ['html', { open: 'never' }]],
   timeout: 120_000,
   use: {
-    screenshot: 'on',
+    screenshot: 'only-on-failure',
     trace: 'on-first-retry',
     video: 'retain-on-failure',
     actionTimeout: 15_000,
