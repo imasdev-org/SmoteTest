@@ -101,7 +101,7 @@ async function selectDateFar(page: Page) {
 
 // --- Tests ---
 
-test.describe.serial('Smoke: Checkout completo con PASSCARD', () => {
+test.describe.serial('Ciclo de prueba 1 - Pilas', () => {
 
   test('1. Login, vaciar carrito, buscar y agregar producto', async ({ page, baseURL }) => {
     await page.goto('/supermercado');

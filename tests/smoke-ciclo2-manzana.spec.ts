@@ -147,7 +147,7 @@ async function selectDateFar(page: Page) {
 
 // --- Tests ---
 
-test.describe.serial('Smoke Ciclo 2: Manzana + Click & Go + PASSCARD', () => {
+test.describe.serial('Ciclo de prueba 2 - Manzana', () => {
 
   test('1. Login, vaciar carrito, buscar manzana y agregar', async ({ page }) => {
     await page.goto('/supermercado');
