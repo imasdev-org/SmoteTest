@@ -1,0 +1,25 @@
+{
+  "name": "smotetest",
+  "version": "1.0.0",
+  "description": "Repositorio para guardar el smoke test automatizado",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imasdev-org/SmoteTest.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/imasdev-org/SmoteTest/issues"
+  },
+  "homepage": "https://github.com/imasdev-org/SmoteTest#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "typescript": "^6.0.2"
+  }
+}
