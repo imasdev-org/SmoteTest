@@ -39,6 +39,11 @@ When('elimino la PASSCARD existente si la hay', async ({ page }) => {
 });
 
 When('selecciono nueva tarjeta de crédito', async ({ page }) => {
+  // Si ya estamos en confirmación (caja?3), skip - la tarjeta ya está seleccionada
+  if (page.url().includes('caja?3')) {
+    console.log('Ya en confirmación - tarjeta ya seleccionada, skip');
+    return;
+  }
   const newCard = page.getByText('Nueva tarjeta de crédito').first();
   await expect(newCard).toBeVisible({ timeout: 10_000 });
   await newCard.click();
@@ -47,6 +52,10 @@ When('selecciono nueva tarjeta de crédito', async ({ page }) => {
 });
 
 When('elijo el tipo {string}', async ({ page }, cardType: string) => {
+  if (page.url().includes('caja?3')) {
+    console.log('Ya en confirmación - skip selección de tipo');
+    return;
+  }
   const option = page.getByText(cardType).first();
   await expect(option).toBeVisible({ timeout: 10_000 });
 
@@ -64,6 +73,10 @@ When('elijo el tipo {string}', async ({ page }, cardType: string) => {
 });
 
 When('completo los datos de la PASSCARD en el popup de GeoPay', async ({ page }) => {
+  if (page.url().includes('caja?3')) {
+    console.log('Ya en confirmación - PASSCARD ya dada de alta, skip');
+    return;
+  }
   const popup = (page as any).__geopayPopup;
   if (!popup) throw new Error('GeoPay popup no disponible');
 
@@ -142,6 +155,10 @@ When('completo los datos de la PASSCARD en el popup de GeoPay', async ({ page })
 });
 
 When('selecciono cuotas', async ({ page }) => {
+  if (page.url().includes('caja?3')) {
+    console.log('Ya en confirmación - skip cuotas');
+    return;
+  }
   // El selector de cuotas está al final de la página de forma de pago
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(1000);

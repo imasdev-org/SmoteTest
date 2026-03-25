@@ -25,7 +25,7 @@ Característica: Ciclo de prueba 1 - Pilas
     Entonces estoy en la página de forma de pago
 
   @requiere-geopay
-  Escenario: Dar de alta tarjeta PASSCARD y seleccionar 2 cuotas
+  Escenario: Dar de alta PASSCARD, confirmar pedido y cancelar
     Dado que estoy en la página de forma de pago
     Cuando selecciono la pestaña "Tarjetas"
     Y elimino la PASSCARD existente si la hay
@@ -36,3 +36,8 @@ Característica: Ciclo de prueba 1 - Pilas
     Y continúo al paso de confirmación
     Entonces veo la fecha de entrega correcta
     Y veo la dirección de entrega correcta
+    Cuando confirmo el pedido
+    Entonces el pedido se completó exitosamente
+    Cuando voy a mis pedidos desde el menú
+    Y cancelo el último pedido
+    Entonces el pedido fue cancelado exitosamente
