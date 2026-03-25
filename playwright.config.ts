@@ -17,10 +17,10 @@ const testDir = defineBddConfig({
 });
 
 const environments = [
-  { name: 'trunk',   baseURL: 'https://trunk-web.imasdev.com' },
-  { name: 'staging', baseURL: 'https://staging-web.imasdev.com' },
-  { name: 'preprod', baseURL: 'https://preprod-web.tiendainglesa.com.uy' },
-  { name: 'prod',    baseURL: 'https://www.tiendainglesa.com.uy' },
+  { name: 'trunk',   baseURL: 'https://trunk-web.imasdev.com', userAgent: undefined },
+  { name: 'staging', baseURL: 'https://staging-web.imasdev.com', userAgent: undefined },
+  { name: 'preprod', baseURL: 'https://preprod-web.tiendainglesa.com.uy', userAgent: 'SmokeTest_I+Dev' },
+  { name: 'prod',    baseURL: 'https://www.tiendainglesa.com.uy', userAgent: 'SmokeTest_I+Dev' },
 ];
 
 const launchOptions = { args: ['--disable-popup-blocking'] };
@@ -49,6 +49,7 @@ export default defineConfig({
         browserName: 'chromium' as const,
         viewport: { width: 1280, height: 720 },
         launchOptions,
+        ...(env.userAgent ? { userAgent: env.userAgent } : {}),
       },
     },
     {
@@ -57,6 +58,7 @@ export default defineConfig({
         baseURL: env.baseURL,
         ...devices['iPhone 14'],
         launchOptions,
+        ...(env.userAgent ? { userAgent: env.userAgent } : {}),
       },
     },
   ]),

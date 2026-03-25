@@ -12,25 +12,34 @@ function isMobile(page: import('@playwright/test').Page): boolean {
 
 Given('que estoy logueado con el usuario de prueba', async ({ page }) => {
   await page.goto('/supermercado');
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForTimeout(3000);
 
-  if (isMobile(page)) {
-    const mobileLoginBtn = page.locator('#LBLLOGIN_MPAGE, [id*="LBLLOGIN"]').first();
-    if (await mobileLoginBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await mobileLoginBtn.click();
-    } else {
-      await page.goto('/supermercado/ingresar');
-    }
+  // Si ya está logueado, no hacer nada
+  const alreadyLogged = await page.getByText(/Hola,/i).first().isVisible({ timeout: 5000 }).catch(() => false);
+  if (alreadyLogged) return;
+
+  // Intentar click en botón de login con múltiples selectores
+  const loginBtn = page.locator('#MPW0017W0019LBLLOGIN')
+    .or(page.locator('#LBLLOGIN_MPAGE'))
+    .or(page.getByText('Ingresar').first());
+
+  if (await loginBtn.first().isVisible({ timeout: 5000 }).catch(() => false)) {
+    await loginBtn.first().click();
   } else {
-    await page.locator('#MPW0017W0019LBLLOGIN').first().click();
+    // Fallback: navegar directo a la página de login
+    await page.goto('/supermercado/ingresar');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(3000);
   }
 
-  await page.waitForSelector('#W0009vUSER', { timeout: 10_000 });
+  // Esperar formulario de login - IDs GeneXus son iguales en todos los ambientes
+  await page.locator('#W0009vUSER').waitFor({ timeout: 10_000 });
   await page.locator('#W0009vUSER').fill(USER.email);
   await page.locator('#W0009vPASSWORD').fill(USER.password);
   await page.locator('#W0009ENTER').click();
-  await page.waitForURL(/(?!.*ingresar)/, { timeout: 15_000 });
-  await page.waitForLoadState('networkidle');
+  await page.waitForFunction(() => !window.location.href.includes('ingresar'), { timeout: 15_000 });
+  await page.waitForLoadState('domcontentloaded');
 });
 
 // --- Carrito ---
@@ -42,7 +51,7 @@ Given('el carrito está vacío', async ({ page }) => {
 
   if (count > 0) {
     await page.goto('/supermercado/carrito');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(3000);
     for (let i = 0; i < 15; i++) {
       const deleteBtn = page.locator('[class*="delete" i], [class*="trash" i], .wCartDeleteBtn, [id*="DELETE" i]').first();
@@ -56,7 +65,7 @@ Given('el carrito está vacío', async ({ page }) => {
       }
     }
     await page.goto('/supermercado');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
   }
 });
 
@@ -78,7 +87,7 @@ When('busco {string}', async ({ page }, term: string) => {
   const searchbox = page.getByRole('textbox', { name: /buscar/i }).first();
   await searchbox.fill(term);
   await searchbox.press('Enter');
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(3000);
 });
 
@@ -97,7 +106,7 @@ When('entro al detalle del primer producto', async ({ page }) => {
   const productLink = page.locator('a[href*=".producto"]').first();
   const href = await productLink.getAttribute('href') || '';
   await page.goto(href);
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(2000);
 });
 

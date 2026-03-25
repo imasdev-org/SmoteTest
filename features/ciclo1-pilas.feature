@@ -32,7 +32,7 @@ Característica: Ciclo de prueba 1 - Pilas
     Y selecciono nueva tarjeta de crédito
     Y elijo el tipo "Pass Card"
     Y completo los datos de la PASSCARD en el popup de GeoPay
-    Y selecciono 2 cuotas
+    Y selecciono cuotas
     Y continúo al paso de confirmación
     Entonces veo la fecha de entrega correcta
     Y veo la dirección de entrega correcta
