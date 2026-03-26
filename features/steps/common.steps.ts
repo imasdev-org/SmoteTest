@@ -63,6 +63,42 @@ Given('que estoy logueado con el usuario de prueba', async ({ page, context }) =
   fs.writeFileSync(STORAGE_FILE, JSON.stringify(storage));
 });
 
+// --- Pre-condición: cancelar pedidos pendientes ---
+
+Given('no hay pedidos pendientes', async ({ page }) => {
+  await page.goto('/supermercado/mis_pedidos');
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForTimeout(5000);
+
+  // Cancelar todos los pedidos que tengan botón "Cancelar Pedido"
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const cancelBtn = page.locator('#BTNCANCELORDER_0001, input[value="Cancelar Pedido"]').first();
+    if (!(await cancelBtn.isVisible({ timeout: 3000 }).catch(() => false))) break;
+
+    console.log(`Cancelando pedido pendiente ${attempt + 1}...`);
+    await cancelBtn.click({ force: true });
+    await page.waitForTimeout(3000);
+
+    // Click en "Cancelar Pedido" del popup de confirmación
+    await page.evaluate(() => {
+      const btns = document.querySelectorAll('input[value="Cancelar Pedido"]');
+      if (btns.length > 1) (btns[1] as HTMLElement).click();
+      else if (btns.length === 1) (btns[0] as HTMLElement).click();
+    });
+    await page.waitForTimeout(5000);
+
+    // Recargar la página para ver el estado actualizado
+    await page.goto('/supermercado/mis_pedidos');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(3000);
+  }
+
+  console.log('No hay pedidos pendientes');
+  await page.goto('/supermercado');
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForTimeout(3000);
+});
+
 // --- Carrito ---
 
 Given('el carrito está vacío', async ({ page }) => {
@@ -103,9 +139,22 @@ Given('que tengo un producto en el carrito', async ({ page }) => {
 });
 
 Then('el carrito tiene al menos {int} producto(s)', async ({ page }, minCount: number) => {
-  // Esperar a que el contador se actualice
   await page.waitForTimeout(2000);
-  const count = await getCartCount(page);
+  let count = await getCartCount(page);
+  // Si el counter no se actualizó, verificar navegando al carrito
+  if (count < minCount) {
+    await page.goto('/supermercado/carrito');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(3000);
+    // Verificar que hay productos en la página del carrito
+    const productosEnCarrito = page.locator('[class*="CartItem"], [class*="cart-item"], [id*="PRODUCTNAME"]');
+    const prodCount = await productosEnCarrito.count();
+    if (prodCount > 0) count = prodCount;
+    // Volver al home
+    await page.goto('/supermercado');
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(2000);
+  }
   expect(count).toBeGreaterThanOrEqual(minCount);
 });
 

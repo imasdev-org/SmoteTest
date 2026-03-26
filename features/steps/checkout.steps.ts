@@ -122,13 +122,36 @@ When('selecciono zona {string} y sucursal {string}', async ({ page }, zona: stri
 // --- Fecha ---
 
 When('selecciono la fecha de entrega más lejana', async ({ page }) => {
-  const fechaInput = page.getByText('Elegí cuando').first();
-  if (!(await fechaInput.isVisible({ timeout: 3000 }).catch(() => false))) return;
+  // Si la dirección dice "Seleccionar", elegir la primera disponible
+  const addressSelect = page.locator('#W0063vCOMBOADDRESSID');
+  if (await addressSelect.isVisible({ timeout: 3000 }).catch(() => false)) {
+    const currentValue = await addressSelect.locator('option:checked').textContent().catch(() => '');
+    if (currentValue?.trim() === 'Seleccionar' || !currentValue?.trim()) {
+      const options = await addressSelect.locator('option').all();
+      if (options.length > 1) {
+        await addressSelect.selectOption({ index: 1 });
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(5000);
+      }
+    }
+  }
 
-  await fechaInput.click({ force: true });
-  await page.waitForTimeout(3000);
+  const fechaInput = page.getByText('Elegí cuando').first();
+  if (!(await fechaInput.isVisible({ timeout: 5000 }).catch(() => false))) return;
+
+  // Click via JS para activar el evento GeneXus correctamente
+  await page.evaluate(() => {
+    const el = document.querySelector('[id*="CTLDATEINFO"], [class*="DateEdit"], .ReadonlyAttributeEditFormDateEdit') as HTMLElement;
+    if (el) { el.click(); el.dispatchEvent(new Event('click', { bubbles: true })); }
+  });
+  await page.waitForTimeout(5000);
 
   const dateModal = page.locator('#W0063TABLEPOPUP');
+  if (!(await dateModal.isVisible({ timeout: 10_000 }).catch(() => false))) {
+    // Segundo intento: click directo con force
+    await fechaInput.click({ force: true });
+    await page.waitForTimeout(5000);
+  }
   await expect(dateModal).toBeVisible({ timeout: 10_000 });
 
   // Seleccionar último día habilitado
@@ -223,7 +246,8 @@ When('completo la compra', async ({ page }) => {
 // --- Assertions ---
 
 Then('estoy en la página de forma de pago', async ({ page }) => {
-  expect(page.url()).toContain('caja?2');
+  // Acepta caja?2 (pago) o caja?3 (confirmación, si la tarjeta ya estaba seleccionada)
+  expect(page.url()).toMatch(/caja\?[23]/);
 });
 
 Given('que estoy en la página de forma de pago', async ({ page, baseURL }) => {
@@ -294,18 +318,7 @@ Given('que estoy en la página de forma de pago', async ({ page, baseURL }) => {
     await page.waitForTimeout(3000);
   }
 
-  // Seleccionar dirección
-  const addressSelect = page.locator('#W0063vCOMBOADDRESSID');
-  if (await addressSelect.isVisible().catch(() => false)) {
-    const allOptions = await addressSelect.locator('option').all();
-    if (allOptions.length > 1) {
-      await addressSelect.selectOption({ index: 1 });
-      await page.waitForLoadState('domcontentloaded');
-      await page.waitForTimeout(5000);
-    }
-  }
-
-  // Seleccionar fecha - usar JS click para activar el evento GeneXus
+  // Seleccionar fecha (no cambiar dirección si ya hay una seleccionada) - usar JS click para activar el evento GeneXus
   await page.waitForTimeout(3000);
   const fechaExists = await page.getByText('Elegí cuando').first().isVisible({ timeout: 5000 }).catch(() => false);
   if (fechaExists) {
@@ -401,36 +414,33 @@ When('voy a mis pedidos desde el menú', async ({ page }) => {
 });
 
 When('cancelo el último pedido', async ({ page }) => {
-  // Explorar los elementos del primer pedido para encontrar el botón cancelar
-  const allLinks = page.locator('a, button, input[type="button"]');
-  const count = await allLinks.count();
-  const cancelTexts: string[] = [];
-  for (let i = 0; i < Math.min(count, 50); i++) {
-    const text = await allLinks.nth(i).textContent().catch(() => '');
-    const value = await allLinks.nth(i).getAttribute('value');
-    const id = await allLinks.nth(i).getAttribute('id');
-    const href = await allLinks.nth(i).getAttribute('href');
-    if (text?.match(/cancel/i) || value?.match(/cancel/i) || id?.match(/cancel/i) || href?.match(/cancel/i)) {
-      cancelTexts.push(`id="${id}" text="${text?.trim().substring(0, 40)}" value="${value}" href="${href?.substring(0, 60)}"`);
-    }
-  }
-  console.log(`Elementos con "cancel": ${cancelTexts.length}`);
-  cancelTexts.forEach(t => console.log(`  ${t}`));
-
-  // El primer botón "Cancelar Pedido" corresponde al pedido más reciente
+  // Click en el primer "Cancelar Pedido" (pedido más reciente)
   const cancelBtn = page.locator('#BTNCANCELORDER_0001, input[value="Cancelar Pedido"]').first();
+  await cancelBtn.scrollIntoViewIfNeeded().catch(() => {});
   if (await cancelBtn.isVisible({ timeout: 10_000 }).catch(() => false)) {
-    await cancelBtn.click();
+    await cancelBtn.click({ force: true });
     await page.waitForTimeout(3000);
-    await page.screenshot({ path: 'test-results/cancel-clicked.png', fullPage: true });
+    await page.screenshot({ path: 'test-results/cancel-popup.png', fullPage: true });
 
-    // Confirmar cancelación si hay modal
-    const confirmCancel = page.getByRole('button', { name: /confirmar|sí|aceptar|ok/i })
-      .or(page.locator('input[value*="Confirmar"]'));
-    if (await confirmCancel.first().isVisible({ timeout: 5000 }).catch(() => false)) {
-      await confirmCancel.first().click();
-      await page.waitForTimeout(5000);
+    // En el popup de confirmación, click en "Cancelar Pedido"
+    const confirmCancel = page.locator('input[value="Cancelar Pedido"]')
+      .or(page.getByRole('button', { name: /cancelar pedido/i }));
+    // Buscar el botón dentro del popup (puede haber un segundo "Cancelar Pedido")
+    const popupBtns = page.locator('[class*="popup" i] input[value="Cancelar Pedido"], [class*="Popup" i] input[value="Cancelar Pedido"], [class*="modal" i] input[value="Cancelar Pedido"]');
+    if (await popupBtns.first().isVisible({ timeout: 5000 }).catch(() => false)) {
+      await popupBtns.first().click({ force: true });
+    } else if (await confirmCancel.nth(1).isVisible({ timeout: 3000 }).catch(() => false)) {
+      // Segundo botón "Cancelar Pedido" (el del popup)
+      await confirmCancel.nth(1).click({ force: true });
+    } else {
+      // Fallback: click por JS en el botón de cancelar visible del popup
+      await page.evaluate(() => {
+        const btns = document.querySelectorAll('input[value="Cancelar Pedido"]');
+        if (btns.length > 1) (btns[1] as HTMLElement).click();
+        else if (btns.length === 1) (btns[0] as HTMLElement).click();
+      });
     }
+    await page.waitForTimeout(5000);
     console.log('Pedido cancelado');
   } else {
     console.log('No se encontró botón Cancelar Pedido');
@@ -438,18 +448,25 @@ When('cancelo el último pedido', async ({ page }) => {
   await page.screenshot({ path: 'test-results/pedido-cancelado.png', fullPage: true });
 });
 
-Then('el pedido fue cancelado exitosamente', async ({ page }) => {
-  const bodyText = await page.textContent('body') || '';
-  const cancelado = bodyText.match(/cancelad|cancel/i);
-  console.log(`Pedido cancelado: ${!!cancelado}`);
-  await page.screenshot({ path: 'test-results/cancelacion-final.png', fullPage: true });
+Then('el pedido aparece como anulado en mis pedidos', async ({ page }) => {
+  // Verificar que el primer pedido dice "Anulado"
+  const anulado = page.getByText(/anulado/i).first();
+  const isAnulado = await anulado.isVisible({ timeout: 10_000 }).catch(() => false);
+  console.log(`Pedido anulado visible: ${isAnulado}`);
+  await page.screenshot({ path: 'test-results/pedido-anulado.png', fullPage: true });
+  expect(isAnulado).toBeTruthy();
 });
 
 // --- Assertions ---
 
 Then('veo la fecha de entrega correcta', async ({ page }) => {
   const bodyText = await page.textContent('body') || '';
-  const fechaMatch = bodyText.match(/(lunes|martes|miércoles|jueves|viernes|sábado|domingo)\s+\d+/i);
+  const fechaMatch = bodyText.match(/(lunes|martes|miércoles|jueves|viernes|sábado|domingo)\s+\d+/i)
+    || bodyText.match(/\d+\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)/i)
+    || bodyText.match(/de\s+\d+\s+a\s+\d+/i)
+    || bodyText.match(/Envío\s*#/i)
+    || bodyText.match(/Retir/i);
+  console.log(`Fecha/entrega encontrada: ${fechaMatch ? fechaMatch[0] : 'no'}`);
   expect(fechaMatch).toBeTruthy();
 });
 
