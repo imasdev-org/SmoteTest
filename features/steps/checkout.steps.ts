@@ -35,6 +35,16 @@ When('inicio el checkout', async ({ page }) => {
   }
   await page.waitForTimeout(3000);
 
+  // Modal "¿Queres agregar al pedido existente?" → elegir pedido nuevo
+  const nuevoBtn = page.getByText('No, quiero uno nuevo')
+    .or(page.locator('input[value*="nuevo" i]'))
+    .or(page.locator('button:has-text("nuevo")'));
+  if (await nuevoBtn.first().isVisible({ timeout: 5000 }).catch(() => false)) {
+    await nuevoBtn.first().click();
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(3000);
+  }
+
   // Confirmar dirección si aparece modal
   const confirmar = page.getByRole('button', { name: /confirmar/i });
   if (await confirmar.isVisible({ timeout: 5000 }).catch(() => false)) {
@@ -49,7 +59,14 @@ When('inicio el checkout', async ({ page }) => {
 // --- Entrega ---
 
 When('selecciono {string}', async ({ page }, option: string) => {
-  await page.getByText(option).first().click();
+  // Cerrar modal de pedido existente si aparece
+  const nuevoBtn = page.getByText('No, quiero uno nuevo')
+    .or(page.locator('input[value*="nuevo" i]'));
+  if (await nuevoBtn.first().isVisible({ timeout: 3000 }).catch(() => false)) {
+    await nuevoBtn.first().click();
+    await page.waitForTimeout(3000);
+  }
+  await page.getByText(option).first().click({ force: true });
   await page.waitForTimeout(2000);
 });
 
@@ -259,6 +276,16 @@ Given('que estoy en la página de forma de pago', async ({ page, baseURL }) => {
   }
   await page.waitForTimeout(3000);
 
+  // Modal "¿Queres agregar al pedido existente?" → elegir pedido nuevo
+  const nuevoBtn = page.getByText('No, quiero uno nuevo')
+    .or(page.locator('input[value*="nuevo" i]'))
+    .or(page.locator('button:has-text("nuevo")'));
+  if (await nuevoBtn.first().isVisible({ timeout: 5000 }).catch(() => false)) {
+    await nuevoBtn.first().click();
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(3000);
+  }
+
   // Confirmar dirección modal
   const confirmar = page.getByRole('button', { name: /confirmar/i });
   if (await confirmar.isVisible({ timeout: 5000 }).catch(() => false)) {
@@ -365,33 +392,10 @@ Then('el pedido se completó exitosamente', async ({ page }) => {
 // --- Mis Pedidos ---
 
 When('voy a mis pedidos desde el menú', async ({ page }) => {
-  // Ir al home primero
-  await page.goto('/supermercado');
+  // Navegar directo a mis pedidos (funciona en desktop y mobile)
+  await page.goto('/supermercado/mis_pedidos');
   await page.waitForLoadState('domcontentloaded');
-  await page.waitForTimeout(3000);
-
-  // Buscar "Mis pedidos" en el menú de usuario o navegar directo
-  const misPedidosLink = page.getByText('Mis pedidos').or(page.locator('a[href*="pedido"]'));
-  if (await misPedidosLink.first().isVisible({ timeout: 5000 }).catch(() => false)) {
-    await misPedidosLink.first().click();
-  } else {
-    // Click en el nombre del usuario para abrir dropdown
-    const userMenu = page.locator('#MPW0017W0019TXTUSERNAME, [id*="TXTUSERNAME"]').first();
-    if (await userMenu.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await userMenu.click();
-      await page.waitForTimeout(2000);
-      const pedidosInMenu = page.getByText('Mis pedidos').first();
-      if (await pedidosInMenu.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await pedidosInMenu.click();
-      }
-    }
-    // Fallback: navegar directo
-    if (!page.url().includes('pedido')) {
-      await page.goto('/supermercado/mis_pedidos');
-    }
-  }
-  await page.waitForLoadState('domcontentloaded');
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(5000);
   await page.screenshot({ path: 'test-results/mis-pedidos.png', fullPage: true });
   console.log(`Mis pedidos URL: ${page.url()}`);
 });

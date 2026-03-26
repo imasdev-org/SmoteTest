@@ -59,16 +59,30 @@ When('elijo el tipo {string}', async ({ page }, cardType: string) => {
   const option = page.getByText(cardType).first();
   await expect(option).toBeVisible({ timeout: 10_000 });
 
-  const popupPromise = page.waitForEvent('popup', { timeout: 30_000 }).catch(() => null);
+  // En desktop abre popup, en mobile redirige
+  const popupPromise = page.waitForEvent('popup', { timeout: 15_000 }).catch(() => null);
+  const currentUrl = page.url();
   await option.click();
+
+  // Esperar popup o redirección
   const popup = await popupPromise;
 
   if (popup) {
+    // Desktop: popup
     (page as any).__geopayPopup = popup;
+    (page as any).__geopayMode = 'popup';
     console.log(`GeoPay popup abierto: ${popup.url()}`);
   } else {
-    await page.screenshot({ path: 'test-results/geopay-no-popup.png', fullPage: true });
-    throw new Error('GeoPay popup no se abrió. Verificar que el servicio está disponible.');
+    // Mobile: puede haber redirigido la página principal a GeoPay
+    await page.waitForTimeout(5000);
+    if (page.url() !== currentUrl && !page.url().includes('caja')) {
+      // La página redirigió a GeoPay
+      (page as any).__geopayMode = 'redirect';
+      console.log(`GeoPay redirect: ${page.url()}`);
+    } else {
+      await page.screenshot({ path: 'test-results/geopay-no-popup.png', fullPage: true });
+      throw new Error('GeoPay no se abrió (ni popup ni redirect). Verificar que el servicio está disponible.');
+    }
   }
 });
 
@@ -77,53 +91,41 @@ When('completo los datos de la PASSCARD en el popup de GeoPay', async ({ page })
     console.log('Ya en confirmación - PASSCARD ya dada de alta, skip');
     return;
   }
-  const popup = (page as any).__geopayPopup;
-  if (!popup) throw new Error('GeoPay popup no disponible');
 
-  await popup.waitForLoadState('domcontentloaded');
-  await popup.waitForTimeout(5000);
-  await popup.screenshot({ path: 'test-results/geopay-popup.png', fullPage: true });
+  const mode = (page as any).__geopayMode;
+  // target es el popup (desktop) o la página principal (mobile redirect)
+  const target = mode === 'popup' ? (page as any).__geopayPopup : page;
+  if (!target) throw new Error('GeoPay no disponible');
+
+  await target.waitForLoadState('domcontentloaded');
+  await target.waitForTimeout(5000);
+  await target.screenshot({ path: 'test-results/geopay-form.png', fullPage: true });
 
   // Campos de GeoPay: cardNumber, dueDateMonth, dueDateYear, firstName, lastName, phone, email, terms
   const [month, year] = PASSCARD.expiry.split('/');
 
-  await popup.locator('#cardNumber').fill(PASSCARD.number);
+  await target.locator('#cardNumber').fill(PASSCARD.number);
   console.log('Número de tarjeta ingresado');
 
-  await popup.locator('#dueDateMonth').fill(month);
-  await popup.locator('#dueDateYear').fill(year);
+  await target.locator('#dueDateMonth').fill(month);
+  await target.locator('#dueDateYear').fill(year);
   console.log(`Vencimiento ingresado: ${month}/${year}`);
 
-  // Nombre y apellido
-  const firstName = popup.locator('#firstName');
-  if (await firstName.isVisible().catch(() => false)) {
-    await firstName.fill('Laura');
-  }
-  const lastName = popup.locator('#lastName');
-  if (await lastName.isVisible().catch(() => false)) {
-    await lastName.fill('Prueba Aguiar');
-  }
+  const firstName = target.locator('#firstName');
+  if (await firstName.isVisible().catch(() => false)) await firstName.fill('Laura');
+  const lastName = target.locator('#lastName');
+  if (await lastName.isVisible().catch(() => false)) await lastName.fill('Prueba Aguiar');
+  const phone = target.locator('#phone');
+  if (await phone.isVisible().catch(() => false)) await phone.fill('59891320045');
+  const email = target.locator('#email');
+  if (await email.isVisible().catch(() => false)) await email.fill('laguiar@adinet.com.uy');
+  const terms = target.locator('#terms');
+  if (await terms.isVisible().catch(() => false)) await terms.check();
 
-  // Teléfono y email
-  const phone = popup.locator('#phone');
-  if (await phone.isVisible().catch(() => false)) {
-    await phone.fill('59891320045');
-  }
-  const email = popup.locator('#email');
-  if (await email.isVisible().catch(() => false)) {
-    await email.fill('laguiar@adinet.com.uy');
-  }
+  await target.screenshot({ path: 'test-results/geopay-filled.png', fullPage: true });
 
-  // Aceptar términos
-  const terms = popup.locator('#terms');
-  if (await terms.isVisible().catch(() => false)) {
-    await terms.check();
-  }
-
-  await popup.screenshot({ path: 'test-results/geopay-filled.png', fullPage: true });
-
-  // Buscar y clickear botón de confirmar/enviar
-  const allBtns = popup.locator('button:visible, input[type="submit"]:visible, input[type="button"]:visible');
+  // Click en Continuar/Confirmar
+  const allBtns = target.locator('button:visible, input[type="submit"]:visible, input[type="button"]:visible');
   const btnCount = await allBtns.count();
   console.log(`Botones en GeoPay: ${btnCount}`);
   for (let i = 0; i < btnCount; i++) {
@@ -132,24 +134,26 @@ When('completo los datos de la PASSCARD en el popup de GeoPay', async ({ page })
     console.log(`  btn[${i}] value="${value}" text="${text?.trim().substring(0, 40)}"`);
   }
 
-  const confirmBtn = popup.getByRole('button', { name: /guardar|confirmar|aceptar|enviar|pagar|save|submit|agregar|dar de alta/i })
-    .or(popup.locator('input[type="submit"]:visible, button[type="submit"]:visible'));
+  const confirmBtn = target.getByRole('button', { name: /guardar|confirmar|aceptar|enviar|pagar|save|continuar/i })
+    .or(target.locator('input[type="submit"]:visible, button[type="submit"]:visible'));
   if (await confirmBtn.first().isVisible({ timeout: 5000 }).catch(() => false)) {
     await confirmBtn.first().click();
     console.log('Tarjeta confirmada en GeoPay');
-  } else {
-    // Último botón visible como fallback
-    if (btnCount > 0) {
-      await allBtns.last().click();
-      console.log('Click en último botón del popup');
-    }
+  } else if (btnCount > 0) {
+    await allBtns.last().click();
+    console.log('Click en último botón de GeoPay');
   }
 
-  // Esperar a que el popup se cierre o timeout
-  await popup.waitForEvent('close', { timeout: 30_000 }).catch(() => {
-    console.log('Popup no se cerró automáticamente');
-  });
-  await page.waitForTimeout(5000);
+  if (mode === 'popup') {
+    // Desktop: esperar cierre del popup
+    await target.waitForEvent('close', { timeout: 30_000 }).catch(() => {});
+    await page.waitForTimeout(5000);
+  } else {
+    // Mobile: esperar redirect de vuelta al checkout
+    await page.waitForFunction(() => window.location.href.includes('caja'), { timeout: 30_000 }).catch(() => {});
+    await page.waitForTimeout(5000);
+  }
+
   await page.screenshot({ path: 'test-results/after-geopay.png', fullPage: true });
   console.log('GeoPay completado');
 });
