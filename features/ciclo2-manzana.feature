@@ -32,18 +32,17 @@ Característica: Ciclo de prueba 2 - Manzana
     Entonces estoy en la página de forma de pago
 
   @requiere-geopay
-  Escenario: Pagar con PASSCARD y completar compra
+  Escenario: Pagar con PASSCARD, confirmar pedido y cancelar
     Dado que estoy en la página de forma de pago
     Cuando selecciono la pestaña "Tarjetas"
+    Y elimino la PASSCARD existente si la hay
     Y selecciono nueva tarjeta de crédito
     Y elijo el tipo "Pass Card"
     Y completo los datos de la PASSCARD en el popup de GeoPay
-    Y completo la compra
-    Entonces veo la landing de status del pedido
-
-  @requiere-geopay
-  Escenario: Cancelar el pedido desde el widget de status
-    Dado que estoy en la landing de status del pedido
-    Cuando hago click en el widget de status del pedido
-    Y cancelo el pedido
-    Entonces el pedido fue cancelado
+    Y continúo al paso de confirmación
+    Entonces veo la fecha de entrega correcta
+    Cuando confirmo el pedido
+    Entonces el pedido se completó exitosamente
+    Cuando voy a mis pedidos desde el menú
+    Y cancelo el último pedido
+    Entonces el pedido fue cancelado exitosamente
