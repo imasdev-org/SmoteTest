@@ -8,9 +8,9 @@ Característica: Ciclo de prueba 2 - Manzana
 
   Antecedentes:
     Dado que estoy logueado con el usuario de prueba
-    Y el carrito está vacío
 
   Escenario: Buscar manzana y agregar al carrito
+    Dado el carrito está vacío
     Cuando busco "manzana"
     Y agrego el primer producto al carrito
     Entonces el carrito tiene al menos 1 producto

@@ -1,7 +1,10 @@
 import { expect } from '@playwright/test';
 import { Given, When, Then } from './fixtures';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const USER = { email: 'laguiar@adinet.com.uy', password: '123' };
+const STORAGE_FILE = path.join(process.cwd(), 'test-results', 'storage-state.json');
 
 function isMobile(page: import('@playwright/test').Page): boolean {
   const viewport = page.viewportSize();
@@ -10,7 +13,17 @@ function isMobile(page: import('@playwright/test').Page): boolean {
 
 // --- Login ---
 
-Given('que estoy logueado con el usuario de prueba', async ({ page }) => {
+Given('que estoy logueado con el usuario de prueba', async ({ page, context }) => {
+  // Restaurar cookies de sesión anterior si existen
+  if (fs.existsSync(STORAGE_FILE)) {
+    try {
+      const storage = JSON.parse(fs.readFileSync(STORAGE_FILE, 'utf-8'));
+      if (storage.cookies?.length) {
+        await context.addCookies(storage.cookies);
+      }
+    } catch {}
+  }
+
   await page.goto('/supermercado');
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(3000);
@@ -19,18 +32,21 @@ Given('que estoy logueado con el usuario de prueba', async ({ page }) => {
   const alreadyLogged = await page.getByText(/Hola,/i).first().isVisible({ timeout: 5000 }).catch(() => false);
   if (alreadyLogged) return;
 
-  // Intentar click en botón de login con múltiples selectores
-  const loginBtn = page.locator('#MPW0017W0019LBLLOGIN')
-    .or(page.locator('#LBLLOGIN_MPAGE'))
-    .or(page.getByText('Ingresar').first());
-
-  if (await loginBtn.first().isVisible({ timeout: 5000 }).catch(() => false)) {
-    await loginBtn.first().click();
-  } else {
-    // Fallback: navegar directo a la página de login
+  if (isMobile(page)) {
+    // Mobile: navegar directo a login (botones del header no son accesibles)
     await page.goto('/supermercado/ingresar');
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(3000);
+  } else {
+    // Desktop: click en botón Ingresar del header
+    const loginBtn = page.locator('#MPW0017W0019LBLLOGIN');
+    if (await loginBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await loginBtn.click();
+    } else {
+      await page.goto('/supermercado/ingresar');
+      await page.waitForLoadState('domcontentloaded');
+      await page.waitForTimeout(3000);
+    }
   }
 
   // Esperar formulario de login - IDs GeneXus son iguales en todos los ambientes
@@ -40,6 +56,11 @@ Given('que estoy logueado con el usuario de prueba', async ({ page }) => {
   await page.locator('#W0009ENTER').click();
   await page.waitForFunction(() => !window.location.href.includes('ingresar'), { timeout: 15_000 });
   await page.waitForLoadState('domcontentloaded');
+
+  // Guardar cookies para reutilizar en los siguientes escenarios del ciclo
+  fs.mkdirSync(path.dirname(STORAGE_FILE), { recursive: true });
+  const storage = await context.storageState();
+  fs.writeFileSync(STORAGE_FILE, JSON.stringify(storage));
 });
 
 // --- Carrito ---

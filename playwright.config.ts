@@ -56,7 +56,10 @@ export default defineConfig({
       name: `${env.name}-mobile`,
       use: {
         baseURL: env.baseURL,
+        browserName: 'chromium' as const,
         ...devices['iPhone 14'],
+        // Forzar Chromium en vez de webkit para soportar popups de GeoPay
+        defaultBrowserType: 'chromium' as any,
         launchOptions,
         ...(env.userAgent ? { userAgent: env.userAgent } : {}),
       },

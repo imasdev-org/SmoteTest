@@ -8,9 +8,9 @@ Característica: Ciclo de prueba 1 - Pilas
 
   Antecedentes:
     Dado que estoy logueado con el usuario de prueba
-    Y el carrito está vacío
 
   Escenario: Buscar producto financiable y agregar al carrito
+    Dado el carrito está vacío
     Cuando busco el producto financiable del ambiente
     Y agrego el primer producto al carrito
     Entonces el carrito tiene al menos 1 producto
