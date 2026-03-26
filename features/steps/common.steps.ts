@@ -66,9 +66,7 @@ Given('que estoy logueado con el usuario de prueba', async ({ page, context }) =
 // --- Carrito ---
 
 Given('el carrito está vacío', async ({ page }) => {
-  const selector = isMobile(page) ? '#CARTCOUNT_MPAGE' : '#MPW0017W0019CARTCOUNT';
-  const text = await page.locator(selector).textContent().catch(() => '0') || '0';
-  const count = parseInt(text) || 0;
+  const count = await getCartCount(page);
 
   if (count > 0) {
     await page.goto('/supermercado/carrito');
@@ -90,16 +88,25 @@ Given('el carrito está vacío', async ({ page }) => {
   }
 });
 
+async function getCartCount(page: import('@playwright/test').Page): Promise<number> {
+  // Probar ambos selectores (desktop y mobile)
+  for (const sel of ['#MPW0017W0019CARTCOUNT', '#CARTCOUNT_MPAGE']) {
+    const text = await page.locator(sel).textContent().catch(() => null);
+    if (text && parseInt(text) > 0) return parseInt(text);
+  }
+  return 0;
+}
+
 Given('que tengo un producto en el carrito', async ({ page }) => {
-  const selector = isMobile(page) ? '#CARTCOUNT_MPAGE' : '#MPW0017W0019CARTCOUNT';
-  const text = await page.locator(selector).textContent().catch(() => '0') || '0';
-  expect(parseInt(text) || 0).toBeGreaterThan(0);
+  const count = await getCartCount(page);
+  expect(count).toBeGreaterThan(0);
 });
 
 Then('el carrito tiene al menos {int} producto(s)', async ({ page }, minCount: number) => {
-  const selector = isMobile(page) ? '#CARTCOUNT_MPAGE' : '#MPW0017W0019CARTCOUNT';
-  const text = await page.locator(selector).textContent().catch(() => '0') || '0';
-  expect(parseInt(text) || 0).toBeGreaterThanOrEqual(minCount);
+  // Esperar a que el contador se actualice
+  await page.waitForTimeout(2000);
+  const count = await getCartCount(page);
+  expect(count).toBeGreaterThanOrEqual(minCount);
 });
 
 // --- Búsqueda ---
