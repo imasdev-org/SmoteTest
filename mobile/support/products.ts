@@ -1,5 +1,8 @@
+import { px } from './ui';
+
 /**
- * Lectura de tarjetas de producto desde el page source (Android).
+ * Lectura de tarjetas de producto desde el page source (Android: text / content-desc / bounds;
+ * iOS: label / name / x-y-width-height).
  * Una tarjeta = nombre (content-desc "Product Name Camel <nombre>") + precio ("$ 328", "U$S 429")
  * en la misma columna, debajo del nombre.
  */
@@ -8,12 +11,30 @@ interface Node { text: string; desc: string; x1: number; y1: number; x2: number;
 
 function parseNodes(src: string): Node[] {
   const nodes: Node[] = [];
-  for (const m of src.matchAll(/<[\w.]+ [^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*>/g)) {
-    const tag = m[0];
-    const attr = (k: string) => (tag.match(new RegExp(`${k}="([^"]*)"`)) ?? [])[1] ?? '';
-    nodes.push({ text: decode(attr('text')), desc: decode(attr('content-desc')), x1: +m[1], y1: +m[2], x2: +m[3], y2: +m[4] });
+  if (driver.isAndroid) {
+    for (const m of src.matchAll(/<[\w.]+ [^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*>/g)) {
+      const attr = attrOf(m[0]);
+      nodes.push({ text: decode(attr('text')), desc: decode(attr('content-desc')), x1: +m[1], y1: +m[2], x2: +m[3], y2: +m[4] });
+    }
+    return nodes;
+  }
+  // iOS: el texto visible está en label (o value) y el nombre del control GeneXus en name.
+  // El árbol conserva pantallas que quedaron atrás: sólo los visibles
+  for (const m of src.matchAll(/<XCUIElementType\w+ [^>]*>/g)) {
+    const attr = attrOf(m[0]);
+    if (attr('visible') === 'false') continue;
+    const [x, y, w, h] = ['x', 'y', 'width', 'height'].map(k => +attr(k));
+    if (!w || !h) continue;
+    nodes.push({ text: decode(attr('label') || attr('value')), desc: decode(attr('name')), x1: x, y1: y, x2: x + w, y2: y + h });
   }
   return nodes;
+}
+
+const attrOf = (tag: string) => (k: string) => (tag.match(new RegExp(` ${k}="([^"]*)"`)) ?? [])[1] ?? '';
+
+/** Textos y nombres de control de la pantalla actual (para chequear qué muestra sin depender del formato del XML). */
+export async function screenNodes() {
+  return parseNodes(await driver.getPageSource());
 }
 
 function decode(s: string) {
@@ -34,24 +55,27 @@ export async function visibleCards(region?: { yMin: number; yMax: number }): Pro
     const m = n.desc.match(/^Product Name Camel (.+)$/);
     if (!m) continue;
     // Sólo tarjetas enteras dentro de la pantalla (las cortadas en el borde no tienen el precio visible)
-    if (n.x1 < 0 || n.x2 > width - 5 || n.y1 < 0 || n.y2 > height * 0.92) continue;
-    if (n.x2 - n.x1 < 150) continue;
+    if (n.x1 < 0 || n.x2 > width - await px(5) || n.y1 < 0 || n.y2 > height * 0.92) continue;
+    if (n.x2 - n.x1 < await px(150)) continue;
     if (region && (n.y1 < region.yMin || n.y1 > region.yMax)) continue;
-    const price = prices.find(p => p.x1 >= n.x1 - 20 && p.x1 < n.x2 && p.y1 >= n.y1 && p.y1 <= n.y1 + 500);
+    const [margin, below] = [await px(20), await px(500)];
+    const price = prices.find(p => p.x1 >= n.x1 - margin && p.x1 < n.x2 && p.y1 >= n.y1 && p.y1 <= n.y1 + below);
     // Tarjeta pegada al borde de abajo: el precio puede quedar fuera de pantalla, no se puede evaluar
     if (!price && n.y2 > height * 0.75) continue;
     cards.push({ name: m[1].trim(), price: price?.text.trim(), x1: n.x1, y1: n.y1, x2: n.x2, y2: n.y2 });
   }
   // Sin duplicados (algunas tarjetas aparecen dos veces en el árbol con enableMultiWindows)
-  return cards.filter((c, i) => cards.findIndex(o => o.name === c.name && Math.abs(o.y1 - c.y1) < 10) === i);
+  const same = await px(10);
+  return cards.filter((c, i) => cards.findIndex(o => o.name === c.name && Math.abs(o.y1 - c.y1) < same) === i);
 }
 
 /** Títulos de carruseles visibles ("Prod List Title ¡Imperdibles de la Semana!") con su posición. */
 export async function visibleCarousels(): Promise<{ title: string; y: number }[]> {
   const { height } = await driver.getWindowSize();
+  const top = await px(150);
   return parseNodes(await driver.getPageSource())
     .map(n => ({ m: n.desc.match(/^Prod List Title (.+)$/), y: n.y1 }))
-    .filter(n => n.m && n.y > 150 && n.y < height * 0.6)
+    .filter(n => n.m && n.y > top && n.y < height * 0.6)
     .map(n => ({ title: n.m![1].trim(), y: n.y }))
     .filter((c, i, all) => all.findIndex(o => o.title === c.title) === i);
 }
@@ -60,9 +84,10 @@ export async function visibleCarousels(): Promise<{ title: string; y: number }[]
 export async function orderSummary(): Promise<{ label: string; amount: number }[]> {
   const nodes = parseNodes(await driver.getPageSource()).filter(n => n.text);
   const lines: { label: string; amount: number }[] = [];
+  const row = await px(40);
   for (const label of nodes.filter(n => /^(SubTotal|Total|Gastos de .+|Descuento.*|Cupón.*|Bonificación.*)$/i.test(n.text.trim()))) {
     // El monto está en la misma fila, a la derecha del label
-    const amount = nodes.find(n => n !== label && Math.abs(n.y1 - label.y1) < 40 && n.x1 > label.x1 && /[\d]/.test(n.text) && /\$/.test(n.text));
+    const amount = nodes.find(n => n !== label && Math.abs(n.y1 - label.y1) < row && n.x1 > label.x1 && /[\d]/.test(n.text) && /\$/.test(n.text));
     if (!amount) continue;
     const negative = /^\s*-/.test(amount.text);
     const value = parseFloat(amount.text.replace(/[^\d,]/g, '').replace(',', '.'));

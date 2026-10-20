@@ -6,6 +6,17 @@
 
 const isAndroid = () => driver.isAndroid;
 
+let scale: number | undefined;
+/**
+ * Las distancias fijas (márgenes, alturas de fila) se calibraron en píxeles del emulador Android
+ * (1080 de ancho). En iOS las coordenadas van en puntos: se escalan por el ancho de la pantalla.
+ */
+export async function px(n: number) {
+  if (isAndroid()) return n;
+  scale ??= (await driver.getWindowSize()).width / 1080;
+  return n * scale;
+}
+
 /**
  * Escapa texto para usarlo como regex dentro de un UiSelector.
  * El parser de Appium NO des-escapa el string literal: la barra va una sola vez ("\d", no "\\d").
@@ -52,6 +63,31 @@ export async function findExact(texts: string | string[], timeout = 10_000) {
   }, { timeout, timeoutMsg: `No se encontró ningún elemento con texto exacto: ${list.join(' | ')}` });
   return found!;
 }
+
+/** Texto completo que matchea la regex (textMatches en Android, MATCHES de NSPredicate en iOS). Sin barras invertidas. */
+export function regexSelector(pattern: string): string {
+  return isAndroid()
+    ? `android=new UiSelector().textMatches("${pattern.replace(/"/g, '\\"')}")`
+    : `-ios predicate string:label MATCHES '${escapePredicate(pattern)}'`;
+}
+
+/** Nombre del control que empieza con el prefijo ("Product Name Camel X", "txt Amount 1,0 kg"). */
+export function descPrefixSelector(prefix: string): string {
+  if (isAndroid()) return `android=new UiSelector().descriptionStartsWith("${prefix.replace(/"/g, '\\"')}")`;
+  const p = escapePredicate(prefix);
+  return `-ios predicate string:name BEGINSWITH '${p}' OR label BEGINSWITH '${p}'`;
+}
+
+/**
+ * Atributo donde GeneXus deja el nombre del control: content-desc en Android; en iOS `name`
+ * (accessibilityIdentifier, o el label si no tiene).
+ */
+export const descAttr = () => isAndroid() ? 'content-desc' : 'name';
+
+/** Contenedores scrolleables (listas, grillas, carruseles). */
+export const scrollableSelector = () => isAndroid()
+  ? 'android=new UiSelector().scrollable(true)'
+  : "-ios predicate string:type IN {'XCUIElementTypeScrollView', 'XCUIElementTypeCollectionView', 'XCUIElementTypeTable'}";
 
 /** Selector por content-desc (Android) / accessibility label (iOS). */
 export function descSelector(text: string): string {
@@ -189,9 +225,9 @@ export async function swipeHorizontal(direction: 'left' | 'right', yRatio: numbe
 
 /** El contenedor scrolleable más grande de la pantalla (lista, grilla, home). */
 export async function mainScrollable() {
-  if (!isAndroid()) return undefined;
   let best: { el: WebdriverIO.Element; area: number } | undefined;
-  for (const el of await $$('android=new UiSelector().scrollable(true)')) {
+  for (const el of await $$(scrollableSelector())) {
+    if (!isAndroid() && !(await el.isDisplayed().catch(() => false))) continue; // iOS deja en el árbol las pantallas de atrás
     const { width, height } = await el.getSize().catch(() => ({ width: 0, height: 0 }));
     if (width * height > (best?.area ?? 0)) best = { el, area: width * height };
   }
@@ -204,6 +240,16 @@ export async function mainScrollable() {
  */
 export async function swipe(direction: 'up' | 'down', percent = 0.6): Promise<boolean> {
   const el = await mainScrollable();
+  if (el && !isAndroid()) {
+    // iOS no tiene scrollGesture: arrastre lento (dragFromToForDuration) para que no siga por inercia
+    const r = await driver.getElementRect(el.elementId);
+    const x = Math.round(r.x + r.width / 2);
+    const dist = r.height * 0.55 * Math.min(percent * 1.5, 1);
+    const [from, to] = [r.y + r.height * 0.75, r.y + r.height * 0.75 - dist];
+    const [y1, y2] = direction === 'up' ? [from, to] : [to, from];
+    await driver.execute('mobile: dragFromToForDuration', { duration: 0.1, fromX: x, fromY: Math.round(y1), toX: x, toY: Math.round(y2) });
+    return true;
+  }
   if (el) {
     // Gesto dentro de la zona central del scrollable: si arranca sobre el header o la barra fija de abajo
     // ("Agregar al carrito" del detalle) no se mueve nada
@@ -232,7 +278,7 @@ export async function swipe(direction: 'up' | 'down', percent = 0.6): Promise<bo
  * (ej. volver la home al principio) sin precisión: no sirve para validar lo que aparece en cada paso.
  */
 export async function quickSwipe(direction: 'up' | 'down') {
-  const el = isAndroid() ? await mainScrollable() : undefined;
+  const el = await mainScrollable();
   if (!el) return swipe(direction, 0.7);
   const r = await driver.getElementRect(el.elementId);
   const x = Math.round(r.x + r.width / 2);
@@ -260,7 +306,7 @@ export async function scrollableContaining(selector: string) {
   const t = await driver.getElementRect(target.elementId);
   const cx = t.x + t.width / 2, cy = t.y + t.height / 2;
   let best: { el: WebdriverIO.Element; area: number } | undefined;
-  for (const el of await $$('android=new UiSelector().scrollable(true)')) {
+  for (const el of await $$(scrollableSelector())) {
     const r = await driver.getElementRect(el.elementId).catch(() => undefined);
     if (!r || cx < r.x || cx > r.x + r.width || cy < r.y || cy > r.y + r.height) continue;
     if (!best || r.width * r.height < best.area) best = { el, area: r.width * r.height };

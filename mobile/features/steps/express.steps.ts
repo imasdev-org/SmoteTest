@@ -3,7 +3,7 @@ import { expect } from '@wdio/globals';
 import { T } from '../../support/texts';
 import { restartApp, sendToBackground } from '../../support/app';
 import {
-  findByText, isVisibleNow, findInput, isVisibleText, swipe, tapText, tapTextIfVisible, typeInto, visibleTexts, waitForLoading, screenshot,
+  descAttr, descPrefixSelector, findByText, isVisibleNow, findInput, isVisibleText, swipe, tapText, tapTextIfVisible, typeInto, visibleTexts, waitForLoading, screenshot,
 } from '../../support/ui';
 import { cartCount, chooseWorldInSelector, firstMinus, firstPlus, isWorldSelectorOpen, search, scrollHomeToTop, selectWorld, tapButton, waitForAppReady } from '../../support/flows';
 import { ctx } from '../../support/context';
@@ -80,8 +80,8 @@ When('intento agregar más de 3 bidones de agua', async () => {
 
 /** Cantidad de la primera tarjeta (desc "txt Amount N"). */
 async function cardAmount() {
-  const el = await $(driver.isAndroid ? 'android=new UiSelector().descriptionStartsWith("txt Amount")' : `-ios predicate string:label BEGINSWITH 'txt Amount'`);
-  return (await el.getAttribute(driver.isAndroid ? 'content-desc' : 'label').catch(() => ''))?.replace('txt Amount', '').trim();
+  const el = await $(descPrefixSelector('txt Amount'));
+  return (await el.getAttribute(descAttr()).catch(() => ''))?.replace('txt Amount', '').trim();
 }
 
 Then('veo el mensaje de tope de bidones', async () => {

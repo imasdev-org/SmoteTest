@@ -27,6 +27,12 @@ npm run appium:drivers        # uiautomator2 (+ xcuitest en la Mac)
 **Android (Windows/Linux/Mac):** Android SDK con `ANDROID_HOME` y un JDK 11+ en `JAVA_HOME` (con el JDK 8 local también corre).
 **iOS (sólo Mac):** Xcode + simulador o iPhone. Para iPhone físico: `XCODE_ORG_ID` (team id) y el IPA firmado para ese equipo.
 
+> **iOS todavía sin calibrar.** Los selectores que en Android dependen de la estructura del árbol
+> (header, X del panel de filtros, combo de cuotas, "atrás") tienen una rama iOS escrita sin ver la app,
+> marcada con `iOS (sin calibrar)`. Al correr por primera vez en la Mac, revisar con Appium Inspector
+> qué expone la app (sobre todo si los nombres de control como `Product Name Camel` quedan en `name`
+> o en `label`) y ajustar esas ramas.
+
 ## Ejecutar
 
 ```bash
@@ -37,7 +43,7 @@ TEST_ENV=preprod APP_VERSION=34.1533 npm run test:android
 TEST_ENV=preprod APP=/ruta/sdTiendaPreprod.apk npm run test:android
 
 # iOS en simulador
-TEST_ENV=preprod IOS_BUNDLE_ID=<bundle id> APP=/ruta/Tienda.app DEVICE_NAME="iPhone 15" npm run test:ios
+TEST_ENV=prod IOS_BUNDLE_ID=<bundle id> TEST_USER=... TEST_PASSWORD=... APP=/ruta/Tienda.app DEVICE_NAME="iPhone 15" npm run test:ios
 
 # Un solo feature / por tags
 npm run test:android -- --spec ./features/02-ciclo1-pilas.feature
@@ -51,7 +57,7 @@ TAGS="@express" npm run test:android
 | `APP_VERSION` | versión esperada para el chequeo de versión |
 | `ANDROID_PACKAGE` / `IOS_BUNDLE_ID` | pisar el identificador del ambiente (prod e iOS no tienen default todavía) |
 | `UDID`, `DEVICE_NAME`, `PLATFORM_VERSION` | elegir dispositivo |
-| `TEST_USER` / `TEST_PASSWORD` | usuario de prueba (default el mismo que el smoke web) |
+| `TEST_USER` / `TEST_PASSWORD` | usuario de prueba del ambiente (obligatorias, no se guardan en el repo) |
 | `EXPRESS_ADDRESS` | domicilio con cobertura express |
 
 Reportes: `test-results/junit-<plataforma>.xml` + screenshots de los pasos que fallan.

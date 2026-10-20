@@ -4,7 +4,7 @@ import { ENV, PASSCARD, USER } from '../../support/env';
 import { T } from '../../support/texts';
 import { inWebview, tapNotification } from '../../support/app';
 import {
-  findAllByText, findByText, findExact, isVisibleText, scrollToText, scrollableContaining, swipeElement, tapText, tapTextIfVisible,
+  descAttr, findAllByText, findByText, findExact, isVisibleText, px, regexSelector, scrollToText, scrollableContaining, swipeElement, tapText, tapTextIfVisible,
   visibleTexts, waitForLoading, screenshot,
 } from '../../support/ui';
 import { enterSuperFromSelector, isWorldSelectorOpen, firstMinus, firstPlus, openCart, scrollToButton, tapButton } from '../../support/flows';
@@ -68,7 +68,7 @@ When('elijo la fecha de entrega más lejana', async () => {
   await findByText(WEEKDAYS, 15_000);
   // Avanzar el carrusel de días hasta el final
   // Carrusel de días: el scrollable que contiene los nombres de los días; se desliza sobre él
-  const daysRow = await scrollableContaining(`android=new UiSelector().textMatches("^(${WEEKDAYS.join('|')})$")`);
+  const daysRow = await scrollableContaining(regexSelector(`^(${WEEKDAYS.join('|')})$`));
   let prev = '';
   for (let i = 0; i < 8 && daysRow; i++) {
     const cur = (await visibleTexts()).filter(t => WEEKDAYS.includes(t)).join('|');
@@ -87,10 +87,7 @@ When('elijo la fecha de entrega más lejana', async () => {
   await waitForLoading();
   await driver.pause(2_000); // al cambiar de día se recargan los horarios
   // Primer horario: el texto puede venir junto ("10:00 a 13:59") o separado en "10:00" / "a" / "13:59"
-  const slotSel = driver.isAndroid
-    ? 'android=new UiSelector().textMatches("^ *[0-9]{1,2}:[0-9]{2}.*")'
-    : `-ios predicate string:label MATCHES '^ *[0-9]{1,2}:[0-9]{2}.*'`;
-  const slot = await $(slotSel);
+  const slot = await $(regexSelector('^ *[0-9]{1,2}:[0-9]{2}.*'));
   await slot.waitForDisplayed({ timeout: 15_000, timeoutMsg: 'No hay horarios de entrega para el día elegido' });
   console.log(`Horario: ${await slot.getText()}`);
   await (slot).click();
@@ -98,7 +95,7 @@ When('elijo la fecha de entrega más lejana', async () => {
   await tapButton(T.continuar[0]);
   if (await tapTextIfVisible(['ACEPTAR', 'Aceptar'], 2_000)) throw new Error('La app no tomó el horario ("Seleccioná un rango horario de entrega")');
   const fecha = await findByText(T.fecha);
-  console.log(`Fecha elegida: ${await fecha.getAttribute(driver.isAndroid ? 'content-desc' : 'label')}`);
+  console.log(`Fecha elegida: ${await fecha.getAttribute(descAttr())}`);
 });
 
 When('continúo a forma de pago', async () => {
@@ -212,18 +209,30 @@ When('elijo {int} cuotas', async (n: number) => {
   // "Cuotas" es una etiqueta; el combo (Spinner) está a la derecha con el valor actual
   const label = await scrollToText(T.cuotas);
   const labelY = (await label.getLocation()).y;
-  const spinnerSel = driver.isAndroid ? 'android=new UiSelector().className("android.widget.Spinner")' : '-ios class chain:**/XCUIElementTypePickerWheel';
+  // iOS (sin calibrar): el combo de GeneXus es un botón / campo en la misma fila que abre un picker o una lista
+  const spinnerSel = driver.isAndroid
+    ? 'android=new UiSelector().className("android.widget.Spinner")'
+    : "-ios predicate string:type IN {'XCUIElementTypeButton', 'XCUIElementTypeTextField'} AND visible == true";
+  const [row, labelX] = [await px(100), (await label.getLocation()).x];
   let spinner: WebdriverIO.Element | undefined;
   for (const sp of await $$(spinnerSel)) {
-    if (Math.abs((await sp.getLocation()).y - labelY) < 100) { spinner = sp; break; }
+    const loc = await sp.getLocation();
+    if (Math.abs(loc.y - labelY) < row && (driver.isAndroid || loc.x > labelX)) { spinner = sp; break; }
   }
   if (!spinner) throw new Error('No encontré el combo de cuotas');
   await (spinner).click();
-  await (await findExact(String(n))).click();
+  const wheel = driver.isAndroid ? undefined : await $('-ios class chain:**/XCUIElementTypePickerWheel');
+  if (wheel && await wheel.isDisplayed().catch(() => false)) {
+    await wheel.setValue(String(n));
+    await tapTextIfVisible(['Listo', 'Done', 'OK', 'Aceptar'], 2_000);
+  } else {
+    await (await findExact(String(n))).click();
+  }
   await waitForLoading();
-  const value = await spinner.$(driver.isAndroid ? 'android=new UiSelector().resourceId("android:id/text1")' : '-ios class chain:**');
-  console.log(`Cuotas: ${await value.getText().catch(() => '?')}`);
-  expect((await value.getText()).trim()).toBe(String(n));
+  const value = driver.isAndroid ? await spinner.$('android=new UiSelector().resourceId("android:id/text1")') : spinner;
+  const current = async () => ((driver.isAndroid ? await value.getText() : (await value.getAttribute('value')) || await value.getAttribute('label')) ?? '').trim();
+  console.log(`Cuotas: ${await current().catch(() => '?')}`);
+  expect(await current()).toBe(String(n));
 });
 
 When('confirmo el pedido', async () => {

@@ -5,13 +5,14 @@
  *
  * Relevado en Android trunk 35.1252. Los íconos del header (menú, selector de
  * mundo, carrito) no tienen accessibility label, por eso se tocan por posición.
+ * Las ramas de iOS están escritas sin relevar la app: marcadas con "iOS (sin calibrar)".
  */
 import { USER } from './env';
 import { T } from './texts';
 import { ctx } from './context';
 import {
-  findAllByText, findByText, findInput, isVisibleNow, isVisibleText, quickSwipe, swipe, swipeElement, tapText, tapTextIfVisible,
-  textSelector, typeInto, waitForLoading,
+  descAttr, findAllByText, findByText, findInput, isVisibleNow, isVisibleText, px, quickSwipe, regexSelector, swipe, swipeElement,
+  tapText, tapTextIfVisible, textSelector, typeInto, waitForLoading,
 } from './ui';
 
 
@@ -50,20 +51,43 @@ export async function scrollToButton(text: string, maxSwipes = 8) {
 
 const HEADER_XPATH = "//*[android.widget.FrameLayout[@clickable='true']][*[.//*[@content-desc='Channel Logo'] or .//android.widget.EditText]]";
 
+// iOS (sin calibrar): XCUITest no expone "clickable" ni la jerarquía de FrameLayouts. Se toman los
+// botones / imágenes tocables de la franja superior de la pantalla, ordenados de izquierda a derecha.
+const IOS_HEADER_SEL = "-ios predicate string:type IN {'XCUIElementTypeButton', 'XCUIElementTypeImage', 'XCUIElementTypeOther'} AND accessible == true AND visible == true";
+
 async function headerButtons() {
   const buttons: { el: WebdriverIO.Element; x: number; y: number }[] = [];
-  for (const el of await $$(`${HEADER_XPATH}/*[@clickable='true']`)) {
-    const { x, y } = await el.getLocation();
-    buttons.push({ el, x, y });
+  if (driver.isAndroid) {
+    for (const el of await $$(`${HEADER_XPATH}/*[@clickable='true']`)) {
+      const { x, y } = await el.getLocation();
+      buttons.push({ el, x, y });
+    }
+  } else {
+    const { height } = await driver.getWindowSize();
+    for (const el of await $$(IOS_HEADER_SEL)) {
+      if ((await el.getAttribute('name')) === 'Channel Logo') continue;
+      const { x, y } = await el.getLocation();
+      const { width: w } = await el.getSize();
+      // Íconos: chicos y arriba (debajo de la status bar)
+      if (y > height * 0.15 || y < 20 || w > 80) continue;
+      buttons.push({ el, x, y });
+    }
   }
   if (!buttons.length) throw new Error('No encontré el header de la app (menú / carrito)');
   // Primera fila del header (en la home hay una segunda fila con el escáner de código de barras)
   const top = Math.min(...buttons.map(b => b.y));
-  return buttons.filter(b => b.y - top < 60).sort((a, b) => a.x - b.x);
+  const row = await px(60);
+  return buttons.filter(b => b.y - top < row).sort((a, b) => a.x - b.x);
 }
 
 /** Menú (izquierda), logo / selector de mundo (centro) o carrito (derecha) del header. */
 export async function headerButton(which: 'menu' | 'mundo' | 'carrito') {
+  if (which === 'mundo' && !driver.isAndroid) {
+    // iOS (sin calibrar): el logo mismo
+    const logo = await $('~Channel Logo');
+    if (!(await logo.isExisting())) throw new Error('No encontré el logo / selector de mundo en el header');
+    return logo;
+  }
   if (which === 'mundo') {
     // El contenedor clickeable del logo puede estar un nivel más adentro: se toma el más interno
     const logos = await $$(`${HEADER_XPATH}//*[@clickable='true'][.//*[@content-desc='Channel Logo']]`);
@@ -85,8 +109,22 @@ export async function openMenu() {
 
 /** Vuelve a la pantalla anterior (detalle, Mis pedidos...). Ojo: con un drawer abierto "back" sale de la app. */
 export async function closeOverlay() {
-  await driver.back();
+  if (driver.isAndroid) await driver.back();
+  else await iosBack();
   await driver.pause(300);
+}
+
+/**
+ * iOS no tiene botón atrás del sistema. Se toca el "atrás" de la barra de navegación y, si no hay,
+ * se hace el gesto desde el borde izquierdo (sin calibrar).
+ */
+async function iosBack() {
+  const navBack = await $('-ios class chain:**/XCUIElementTypeNavigationBar/XCUIElementTypeButton[1]');
+  if (await navBack.isDisplayed().catch(() => false)) return navBack.click();
+  const { width, height } = await driver.getWindowSize();
+  const y = Math.round(height / 2);
+  await driver.action('pointer', { parameters: { pointerType: 'touch' } })
+    .move({ x: 2, y }).down().move({ x: Math.round(width * 0.7), y, duration: 300 }).up().perform();
 }
 
 /** Vuelve de una pantalla abierta desde el menú (Mis pedidos...): la app regresa con el drawer abierto. */
@@ -131,10 +169,7 @@ export async function openCart() {
 /** Número del badge del carrito (0 si no hay badge). */
 export async function cartCount(): Promise<number> {
   const { width, height } = await driver.getWindowSize();
-  const sel = driver.isAndroid
-    ? 'android=new UiSelector().textMatches("^[0-9]+$")'
-    : `-ios predicate string:label MATCHES '^[0-9]+$'`;
-  for (const el of await $$(sel)) {
+  for (const el of await $$(regexSelector('^[0-9]+$'))) {
     const { x, y } = await el.getLocation();
     if (x > width * 0.85 && y < height * 0.12) return parseInt(await el.getText(), 10);
   }
@@ -263,7 +298,7 @@ export async function firstMinus() {
  * (el hijo del "Var Product Image") en lugar del centro del contenedor.
  */
 export async function openDetailFromImage(container: WebdriverIO.Element) {
-  const photo = container.$('android=new UiSelector().className("android.widget.ImageView")');
+  const photo = container.$(driver.isAndroid ? 'android=new UiSelector().className("android.widget.ImageView")' : '-ios class chain:**/XCUIElementTypeImage');
   if (await photo.isExisting().catch(() => false)) await photo.click();
   else await container.click();
   await waitForLoading();
@@ -360,12 +395,10 @@ export async function cancelOrder(orderNumber: string) {
 /** Estado (PENDIENTE, ANULADO, ...) que muestra la tarjeta del pedido. */
 export async function orderStatus(orderNumber: string) {
   const orderY = await scrollToOrder(orderNumber);
-  const sel = driver.isAndroid
-    ? 'android=new UiSelector().textMatches("^[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ -]{3,}$")'
-    : `-ios predicate string:label MATCHES '^[A-Z][A-Z -]{3,}$'`;
-  for (const el of await $$(sel)) {
+  const row = await px(80);
+  for (const el of await $$(regexSelector('^[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ -]{3,}$'))) {
     const { y } = await el.getLocation();
-    if (Math.abs(y - orderY) < 80) return (await el.getText()).trim();
+    if (Math.abs(y - orderY) < row) return (await el.getText()).trim();
   }
   return '';
 }
@@ -388,7 +421,7 @@ export async function cancelAllPendingOrders(maxSwipes = 25) {
     const dates = await findAllByText(['Fecha ']);
     const dateAt = async (y: number) => {
       const above = dates.filter(d => d.y < y).pop();
-      return above ? ((await above.el.getAttribute(driver.isAndroid ? 'content-desc' : 'label')) ?? '').replace('Fecha ', '').trim() : '';
+      return above ? ((await above.el.getAttribute(descAttr())) ?? '').replace('Fecha ', '').trim() : '';
     };
     let acted = false;
     for (const btn of await findAllByText(T.cancelarPedido)) {
@@ -401,7 +434,7 @@ export async function cancelAllPendingOrders(maxSwipes = 25) {
     }
     if (acted) continue;
     // Si ya aparecen pedidos de días anteriores a hoy, no hay más pendientes de hoy
-    const keys = await Promise.all(dates.map(d => d.el.getAttribute(driver.isAndroid ? 'content-desc' : 'label')));
+    const keys = await Promise.all(dates.map(d => d.el.getAttribute(descAttr())));
     if (keys.some(k => k && toKey(k.replace('Fecha ', '').trim()) < toKey(todayStr))) break;
     const before = await driver.getPageSource();
     await swipe('up', 0.7);

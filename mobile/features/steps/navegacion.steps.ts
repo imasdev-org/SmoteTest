@@ -1,9 +1,9 @@
 import { When, Then } from '@wdio/cucumber-framework';
 import { expect } from '@wdio/globals';
 import { T } from '../../support/texts';
-import { findAllByText, findByText, isVisibleNow, isVisibleText, scrollableContaining, swipe, swipeElement, tapText, waitForLoading, screenshot } from '../../support/ui';
+import { descPrefixSelector, findAllByText, findByText, isVisibleNow, isVisibleText, px, scrollableContaining, swipe, swipeElement, tapText, waitForLoading, screenshot } from '../../support/ui';
 import { closeOverlay, openDetailFromImage, scrollHomeToTop } from '../../support/flows';
-import { visibleCards, visibleCarousels, type Card } from '../../support/products';
+import { screenNodes, visibleCards, visibleCarousels, type Card } from '../../support/products';
 import { ctx } from '../../support/context';
 
 const MAX_CAROUSELS = Number(process.env.MAX_CAROUSELS || 3);
@@ -18,7 +18,7 @@ function describe(cards: Card[]) {
 
 /** Tarjetas del carrusel cuyo título está en y (las tarjetas están debajo del título). */
 async function carouselCards(titleY: number) {
-  return visibleCards({ yMin: titleY + 50, yMax: titleY + 700 });
+  return visibleCards({ yMin: titleY + await px(50), yMax: titleY + await px(700) });
 }
 
 When('recorro los carruseles de la home', async () => {
@@ -32,7 +32,7 @@ When('recorro los carruseles de la home', async () => {
       const before = await carouselCards(c.y);
       if (!before.length) continue;
       // Deslizar el carrusel: swipe sobre el scrollable que contiene su primer producto
-      const row = await scrollableContaining(`android=new UiSelector().descriptionStartsWith("Product Name Camel ${before[0].name.replace(/"/g, '\\"')}")`);
+      const row = await scrollableContaining(descPrefixSelector(`Product Name Camel ${before[0].name}`));
       if (!row) throw new Error(`No encontré el contenedor deslizable del carrusel "${c.title}"`);
       await swipeElement(row, 'left');
       // Las tarjetas que entran al deslizar cargan el precio un momento después: esperar hasta 5 s
@@ -137,18 +137,19 @@ When('entro al detalle de un producto de un carrusel de la home', async () => {
 Then('el detalle muestra imagen, nombre, código de caja, EAN, precio y agregar al carrito', async () => {
   await findByText(T.imagenDetalle, 15_000);
   const checks: [string, RegExp][] = [
-    ['nombre', /content-desc="Product Name Camel /],
-    ['código de caja', /text="Código de Caja: \d+"/],
-    ['EAN', /text="EAN: \d+"/],
-    ['precio', /text="(\$|U\$S)\s*[\d.,]+"/],
+    ['nombre', /^desc:Product Name Camel /m],
+    ['código de caja', /^text:Código de Caja: \d+$/m],
+    ['EAN', /^text:EAN: \d+$/m],
+    ['precio', /^text:(\$|U\$S)\s*[\d.,]+$/m],
     // "Agregar al carrito" o, si ya está en el carrito, el selector de cantidad ("1 ud." / "1,0 kg")
-    ['agregar al carrito', /text="Agregar al carrito"|text="\d+ ud\."|text="[\d,]+ kg"/],
+    ['agregar al carrito', /^text:(Agregar al carrito|\d+ ud\.|[\d,]+ kg)$/m],
   ];
   // El detalle carga por partes (el precio aparece después, con un ícono de recarga mientras tanto)
   let texts = '';
   let faltantes: string[] = [];
   await driver.waitUntil(async () => {
-    texts = await driver.getPageSource();
+    // Una línea por texto / nombre de control (el XML del page source es distinto en Android y en iOS)
+    texts = (await screenNodes()).flatMap(n => [`desc:${n.desc}`, `text:${n.text}`]).join('\n');
     faltantes = checks.filter(([, re]) => !re.test(texts)).map(([n]) => n);
     return !faltantes.length;
   }, { timeout: 15_000, interval: 1_000 }).catch(() => {});
@@ -157,7 +158,7 @@ Then('el detalle muestra imagen, nombre, código de caja, EAN, precio y agregar 
   const cardPrice = (ctx as any).detailPrice as string | undefined;
   if (cardPrice) {
     const amount = cardPrice.replace(/\s+/g, ' ');
-    expect(texts.includes(`text="${amount}"`)).toBe(true);
+    expect(texts.split('\n').includes(`text:${amount}`)).toBe(true);
   }
 });
 
@@ -218,10 +219,25 @@ async function openFilters() {
  */
 const CLOSE_FILTERS_XPATH = "//*[.//*[@text='Filtros']]/following-sibling::*/android.widget.FrameLayout[@clickable='true'][.//android.widget.ImageView]";
 
+/** iOS (sin calibrar): botones sin texto en la franja del título "Filtros"; la X es el de más a la derecha. */
+async function iosCloseFiltersButtons() {
+  const title = await $("-ios predicate string:label == 'Filtros' AND visible == true");
+  if (!(await title.isExisting())) return [];
+  const { y } = await title.getLocation();
+  const row = await px(120);
+  const found: { el: WebdriverIO.Element; x: number }[] = [];
+  for (const el of await $$("-ios predicate string:type == 'XCUIElementTypeButton' AND visible == true")) {
+    const loc = await el.getLocation();
+    if (Math.abs(loc.y - y) < row && !(await el.getAttribute('label'))?.trim()) found.push({ el, x: loc.x });
+  }
+  return found.sort((a, b) => a.x - b.x).map(f => f.el);
+}
+
 async function closeFilters() {
   // Mientras el panel recarga (diálogo con el ↻) la X no está accesible
   let close: WebdriverIO.ElementArray | WebdriverIO.Element[] = [];
-  await driver.waitUntil(async () => (close = await $$(CLOSE_FILTERS_XPATH)).length > 0, { timeout: 20_000, interval: 500 }).catch(() => {});
+  const find = async () => driver.isAndroid ? $$(CLOSE_FILTERS_XPATH) : iosCloseFiltersButtons();
+  await driver.waitUntil(async () => (close = await find()).length > 0, { timeout: 20_000, interval: 500 }).catch(() => {});
   if (!close.length) throw new Error('No encontré la X para cerrar el panel de filtros');
   await close[close.length - 1].click();
   await findByText(['Filtrar'], 15_000);
