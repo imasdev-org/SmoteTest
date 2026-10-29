@@ -3,16 +3,16 @@ import { expect } from '@wdio/globals';
 import { T } from '../../support/texts';
 import { restartApp, sendToBackground } from '../../support/app';
 import {
-  descAttr, descPrefixSelector, findByText, isVisibleNow, findInput, isVisibleText, swipe, tapText, tapTextIfVisible, typeInto, visibleTexts, waitForLoading, screenshot,
+  descOf, descPrefixSelector, findByText, isVisibleNow, findInput, isVisibleText, swipe, tapText, tapTextIfVisible, typeInto, visibleTexts, waitForLoading, screenshot,
 } from '../../support/ui';
-import { cartCount, chooseWorldInSelector, firstMinus, firstPlus, isWorldSelectorOpen, search, scrollHomeToTop, selectWorld, tapButton, waitForAppReady } from '../../support/flows';
+import { cartCount, chooseWorldInSelector, expectExpressHome, isExpressHome, waitForExpressHome, firstMinus, firstPlus, isWorldSelectorOpen, search, scrollHomeToTop, selectWorld, tapButton, waitForAppReady } from '../../support/flows';
 import { ctx } from '../../support/context';
 
 const EXPRESS_ADDRESS = process.env.EXPRESS_ADDRESS || 'Rivera 3500';
 
 When('elijo un domicilio con cobertura express', async () => {
   // Anónimo en Express: onboarding con el mapa (dirección del GPS), "Continuar" y popup "Confirmar"
-  if (await isVisibleText(T.homeExpress, 2_000)) return;
+  if (await waitForExpressHome(2_000)) return;
   if (await isVisibleText(T.sinCoberturaExpress, 3_000)) {
     await typeInto(await findInput(), EXPRESS_ADDRESS);
     await driver.pause(2_500);
@@ -23,21 +23,21 @@ When('elijo un domicilio con cobertura express', async () => {
   expect(await isVisibleText(T.sinCoberturaExpress, 2_000)).toBe(false);
   await tapButton(T.continuar[0]);
   await tapButton(T.confirmar[0]);
-  await findByText(T.homeExpress, 60_000);
+  await expectExpressHome(60_000);
 });
 
 async function enterExpress() {
-  if (await isVisibleNow(T.homeExpress)) return;
+  if (await isExpressHome()) return;
   // Logueado entra a la home; anónimo cae en el onboarding de Express (lo resuelve "elijo un domicilio...")
   // A veces la carga de Express se queda en una pantalla en blanco: se reintenta una vez reiniciando la app
   for (let intento = 1; intento <= 2; intento++) {
     await selectWorld('Express');
-    if (await isVisibleText([...T.homeExpress, ...T.iniciarSesion], 60_000)) return;
+    if (await waitForExpressHome(60_000, T.iniciarSesion)) return;
     console.log(`ATENCIÓN: Express no cargó en 60 s (intento ${intento}); se reinicia la app`);
     await screenshot(`express-no-carga-${intento}`);
     await restartApp();
     await waitForAppReady();
-    if (await isVisibleText(T.homeExpress, 5_000)) return;
+    if (await waitForExpressHome(5_000)) return;
   }
   throw new Error('El mundo Express no cargó (pantalla en blanco) después de reintentar');
 }
@@ -81,7 +81,7 @@ When('intento agregar más de 3 bidones de agua', async () => {
 /** Cantidad de la primera tarjeta (desc "txt Amount N"). */
 async function cardAmount() {
   const el = await $(descPrefixSelector('txt Amount'));
-  return (await el.getAttribute(descAttr()).catch(() => ''))?.replace('txt Amount', '').trim();
+  return (await descOf(el).catch(() => '')).replace('txt Amount', '').trim();
 }
 
 Then('veo el mensaje de tope de bidones', async () => {
@@ -127,7 +127,7 @@ Then('veo el mensaje de tope del carrito', async () => {
 });
 
 Given('estoy en el mundo Express con productos en el carrito', async () => {
-  if (!(await isVisibleNow(T.homeExpress))) await enterExpress();
+  if (!(await isExpressHome())) await enterExpress();
   if ((await cartCount()) === 0) await addFromQuickBuy();
   ctx.world = 'Express';
 });
@@ -144,12 +144,12 @@ Then('la app abre en el selector de mundos', async () => {
 
 When('elijo el mundo Express en el selector', async () => {
   await chooseWorldInSelector('Express');
-  await findByText(T.homeExpress, 60_000);
+  await expectExpressHome(60_000);
   ctx.world = 'Express';
 });
 
 Then('la app abre en el mundo Express', async () => {
-  await findByText(T.homeExpress, 30_000);
+  await expectExpressHome(30_000);
   await screenshot('mundo-express');
 });
 
@@ -175,11 +175,11 @@ When('cambio al mundo {word}', async (mundo: string) => {
 Given('estoy en el mundo Supermercado', async () => {
   await scrollHomeToTop();
   await findByText([...T.home, ...T.homeExpress], 30_000);
-  if (await isVisibleNow(T.homeExpress)) {
+  if (await isExpressHome()) {
     await selectWorld('Super');
     await findByText(T.home, 30_000);
   }
-  expect(await isVisibleNow(T.homeExpress)).toBe(false);
+  expect(await isExpressHome()).toBe(false);
   ctx.world = 'Super';
 });
 

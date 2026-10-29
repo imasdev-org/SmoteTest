@@ -1,8 +1,8 @@
 import { When, Then } from '@wdio/cucumber-framework';
 import { expect } from '@wdio/globals';
 import { T } from '../../support/texts';
-import { descPrefixSelector, findAllByText, findByText, isVisibleNow, isVisibleText, px, scrollableContaining, swipe, swipeElement, tapText, waitForLoading, screenshot } from '../../support/ui';
-import { closeOverlay, openDetailFromImage, scrollHomeToTop } from '../../support/flows';
+import { descPrefixSelector, findAllByText, findByText, isVisibleNow, isVisibleText, px, scrollableContaining, swipe, swipeElement, tapText, waitForLoading, screenshot, windowSize } from '../../support/ui';
+import { closeOverlay, isExpressHome, openDetailFromImage, scrollHomeToTop, tapElement } from '../../support/flows';
 import { screenNodes, visibleCards, visibleCarousels, type Card } from '../../support/products';
 import { ctx } from '../../support/context';
 
@@ -23,7 +23,7 @@ async function carouselCards(titleY: number) {
 
 When('recorro los carruseles de la home', async () => {
   nav.carousels = [];
-  const { height } = await driver.getWindowSize();
+  const { height } = await windowSize();
   for (let i = 0; i < 15 && nav.carousels.length < MAX_CAROUSELS; i++) {
     for (const c of await visibleCarousels()) {
       if (nav.carousels.some(o => o.title === c.title)) continue;
@@ -87,7 +87,15 @@ Then('veo al menos {int} productos con nombre y precio', async (min: number) => 
   await waitForLoading();
   // Esperar a que la grilla termine de cargar (al principio se ve vacía y oscurecida)
   let cards: Card[] = [];
-  await driver.waitUntil(async () => (cards = await visibleCards()).length >= Math.min(min, 4), { timeout: 30_000, interval: 1_500 }).catch(() => {});
+  const want = Math.min(min, 4);
+  await driver.waitUntil(async () => (cards = await visibleCards()).length >= Math.min(want, 2), { timeout: 30_000, interval: 1_500 }).catch(() => {});
+  // Pantalla chica (iPhone 8: grilla de 2 columnas, entran 2 tarjetas completas): bajar juntando tarjetas y volver
+  let swipes = 0;
+  for (; swipes < 3 && cards.length && cards.length < want; swipes++) {
+    await swipe('up', 0.4);
+    for (const c of await visibleCards()) if (!cards.some(o => o.name === c.name)) cards.push(c);
+  }
+  for (let i = 0; i < swipes; i++) await swipe('down', 0.4);
   console.log(`Productos: ${describe(cards)}`);
   expect(cards.length).toBeGreaterThanOrEqual(Math.min(min, 4));
   const sinPrecio = cards.filter(c => !c.price);
@@ -102,14 +110,15 @@ Then('puedo volver a la home', async () => {
   // Vuelve a la home del mismo mundo (no a la del otro: la home vuelve scrolleada, se sube para ver la franja de Express)
   if (ctx.world) {
     await scrollHomeToTop();
-    const enExpress = await isVisibleNow(T.homeExpress);
+    const enExpress = await isExpressHome();
     if (enExpress !== (ctx.world === 'Express')) throw new Error(`Al volver desde ${ctx.world} la app quedó en la home de ${enExpress ? 'Express' : 'Super'}`);
   }
 });
 
 When('entro al detalle de un producto de un carrusel de la home', async () => {
   for (let i = 0; i < 8; i++) {
-    const [c] = (await visibleCarousels()).filter(o => o.y < 900);
+    const maxY = await px(900);
+    const [c] = (await visibleCarousels()).filter(o => o.y < maxY);
     if (c) {
       const [card] = await carouselCards(c.y);
       if (card) {
@@ -120,8 +129,9 @@ When('entro al detalle de un producto de un carrusel de la home', async () => {
         // Imagen de la tarjeta: el "Var Product Image" de la misma columna, justo arriba del nombre
         // (con el carrusel deslizado hay tarjetas cortadas a los costados: se busca la de la misma columna)
         let image: WebdriverIO.Element | undefined;
-        for (const i of (await findAllByText(T.imagenEnGrilla)).filter(i => i.y < card.y1 && i.y > card.y1 - 450)) {
-          if (Math.abs((await i.el.getLocation()).x - card.x1) < 120) { image = i.el; break; }
+        const [above, column] = [await px(450), await px(120)];
+        for (const i of (await findAllByText(T.imagenEnGrilla)).filter(i => i.y < card.y1 && i.y > card.y1 - above)) {
+          if (Math.abs((await i.el.getLocation()).x - card.x1) < column) { image = i.el; break; }
         }
         if (image) {
           await openDetailFromImage(image);
@@ -141,8 +151,8 @@ Then('el detalle muestra imagen, nombre, código de caja, EAN, precio y agregar 
     ['código de caja', /^text:Código de Caja: \d+$/m],
     ['EAN', /^text:EAN: \d+$/m],
     ['precio', /^text:(\$|U\$S)\s*[\d.,]+$/m],
-    // "Agregar al carrito" o, si ya está en el carrito, el selector de cantidad ("1 ud." / "1,0 kg")
-    ['agregar al carrito', /^text:(Agregar al carrito|\d+ ud\.|[\d,]+ kg)$/m],
+    // "Agregar al carrito" o, si ya está en el carrito, el selector de cantidad ("1 ud." / "1,0 kg"; iOS "1.0 kg")
+    ['agregar al carrito', /^text:(Agregar al carrito|\d+ ud\.|[\d.,]+ kg)$/m],
   ];
   // El detalle carga por partes (el precio aparece después, con un ícono de recarga mientras tanto)
   let texts = '';
@@ -171,7 +181,7 @@ Then('el detalle muestra productos relacionados con precio', async () => {
   }
   const header = await findByText(RELACIONADOS, 15_000);
   // Subir el carrusel de relacionados para que las tarjetas se vean enteras
-  const { height } = await driver.getWindowSize();
+  const { height } = await windowSize();
   if ((await header.getLocation()).y > height * 0.4) await swipe('up', 0.3);
   await driver.pause(1_000);
   const cards = await visibleCards();
@@ -219,18 +229,19 @@ async function openFilters() {
  */
 const CLOSE_FILTERS_XPATH = "//*[.//*[@text='Filtros']]/following-sibling::*/android.widget.FrameLayout[@clickable='true'][.//android.widget.ImageView]";
 
-/** iOS (sin calibrar): botones sin texto en la franja del título "Filtros"; la X es el de más a la derecha. */
+/**
+ * iOS: la X es un botón flotante abajo al centro del panel (imagen sin nombre de ~90x90, relevado en iPhone 8),
+ * no un hermano del título como en Android.
+ */
 async function iosCloseFiltersButtons() {
-  const title = await $("-ios predicate string:label == 'Filtros' AND visible == true");
-  if (!(await title.isExisting())) return [];
-  const { y } = await title.getLocation();
-  const row = await px(120);
-  const found: { el: WebdriverIO.Element; x: number }[] = [];
-  for (const el of await $$("-ios predicate string:type == 'XCUIElementTypeButton' AND visible == true")) {
-    const loc = await el.getLocation();
-    if (Math.abs(loc.y - y) < row && !(await el.getAttribute('label'))?.trim()) found.push({ el, x: loc.x });
+  if (!(await isVisibleNow(['Filtros']))) return [];
+  const { width } = await windowSize();
+  const found: WebdriverIO.Element[] = [];
+  for (const el of await $$("-ios predicate string:type == 'XCUIElementTypeImage' AND rect.width > 60 AND rect.width < 120 AND rect.height > 60 AND rect.height < 120")) {
+    const r = await driver.getElementRect(el.elementId);
+    if (Math.abs(r.x + r.width / 2 - width / 2) < width * 0.15) found.push(el);
   }
-  return found.sort((a, b) => a.x - b.x).map(f => f.el);
+  return found;
 }
 
 async function closeFilters() {
@@ -239,7 +250,7 @@ async function closeFilters() {
   const find = async () => driver.isAndroid ? $$(CLOSE_FILTERS_XPATH) : iosCloseFiltersButtons();
   await driver.waitUntil(async () => (close = await find()).length > 0, { timeout: 20_000, interval: 500 }).catch(() => {});
   if (!close.length) throw new Error('No encontré la X para cerrar el panel de filtros');
-  await close[close.length - 1].click();
+  await tapElement(close[close.length - 1]);
   await findByText(['Filtrar'], 15_000);
   await waitForCards();
 }
@@ -306,7 +317,7 @@ When('filtro por la categoría {string}', async (category: string) => {
   const [header] = await findAllByText(['Categorías']);
   const option = (await findAllByText([category])).find(o => o.y > header.y);
   if (!option) throw new Error(`No encontré la categoría "${category}" en los filtros`);
-  await option.el.click();
+  await tapElement(option.el);
   await waitForLoading(5_000);
   await screenshot('filtro-categoria');
   await closeFilters();
@@ -321,7 +332,17 @@ Then('la búsqueda muestra sólo la categoría {string} con productos con precio
   expect(cards.length).toBeGreaterThan(0);
   const sinPrecio = cards.filter(c => !c.price);
   if (sinPrecio.length) throw new Error(`Productos sin precio: ${describe(sinPrecio)}`);
-  // Al filtrar, los chips pasan a ser subcategorías: se valida que el resultado cambió y tiene precio
+  // Al filtrar, los chips pasan a ser subcategorías: se valida que el resultado cambió y tiene precio. Si los primeros
+  // productos ya eran de esa categoría (ej. "leche" en Frescos; en el iPhone 8 entran sólo 2 tarjetas) la grilla
+  // puede no cambiar: entonces se confirma en el panel que el filtro quedó aplicado
   const before = (ctx as any).beforeFilter as string[];
-  expect(cards.map(c => c.name).join('|')).not.toBe(before.join('|'));
+  if (cards.map(c => c.name).join('|') === before.join('|')) {
+    await openFilters();
+    const aplicado = await isVisibleText(['Resultados filtrados por'], 5_000);
+    const [header] = await findAllByText(['Resultados filtrados por']);
+    const enFiltro = header && (await findAllByText([category])).some(o => o.y > header.y);
+    await closeFilters();
+    if (!aplicado || !enFiltro) throw new Error(`El filtro por "${category}" no quedó aplicado (la grilla no cambió y el panel no lo muestra)`);
+    console.log(`La grilla no cambió (los primeros ya eran de ${category}); el panel muestra el filtro aplicado`);
+  }
 });

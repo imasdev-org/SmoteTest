@@ -1,4 +1,4 @@
-import { px } from './ui';
+import { px, windowSize } from './ui';
 
 /**
  * Lectura de tarjetas de producto desde el page source (Android: text / content-desc / bounds;
@@ -18,14 +18,16 @@ function parseNodes(src: string): Node[] {
     }
     return nodes;
   }
-  // iOS: el texto visible está en label (o value) y el nombre del control GeneXus en name.
-  // El árbol conserva pantallas que quedaron atrás: sólo los visibles
+  // iOS: name/label = nombre del control GeneXus ("Product Name Camel"), value = el dato. Se arma desc como el
+  // content-desc de Android ("Product Name Camel <nombre>"). `visible` no viene (pageSourceExcludedAttributes):
+  // las tarjetas se filtran por posición en pantalla
   for (const m of src.matchAll(/<XCUIElementType\w+ [^>]*>/g)) {
     const attr = attrOf(m[0]);
-    if (attr('visible') === 'false') continue;
     const [x, y, w, h] = ['x', 'y', 'width', 'height'].map(k => +attr(k));
     if (!w || !h) continue;
-    nodes.push({ text: decode(attr('label') || attr('value')), desc: decode(attr('name')), x1: x, y1: y, x2: x + w, y2: y + h });
+    const [name, value] = [decode(attr('name')), decode(attr('value'))];
+    const desc = value && value !== name ? `${name} ${value}` : name;
+    nodes.push({ text: value || decode(attr('label')), desc, x1: x, y1: y, x2: x + w, y2: y + h });
   }
   return nodes;
 }
@@ -47,7 +49,7 @@ export interface Card { name: string; price?: string; x1: number; y1: number; x2
 
 /** Tarjetas de producto completamente visibles en pantalla, con su precio (si lo tiene). */
 export async function visibleCards(region?: { yMin: number; yMax: number }): Promise<Card[]> {
-  const { width, height } = await driver.getWindowSize();
+  const { width, height } = await windowSize();
   const nodes = parseNodes(await driver.getPageSource());
   const prices = nodes.filter(n => PRICE.test(n.text));
   const cards: Card[] = [];
@@ -71,7 +73,7 @@ export async function visibleCards(region?: { yMin: number; yMax: number }): Pro
 
 /** Títulos de carruseles visibles ("Prod List Title ¡Imperdibles de la Semana!") con su posición. */
 export async function visibleCarousels(): Promise<{ title: string; y: number }[]> {
-  const { height } = await driver.getWindowSize();
+  const { height } = await windowSize();
   const top = await px(150);
   return parseNodes(await driver.getPageSource())
     .map(n => ({ m: n.desc.match(/^Prod List Title (.+)$/), y: n.y1 }))

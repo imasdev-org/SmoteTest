@@ -1,3 +1,4 @@
+import { windowSize } from './ui';
 import { ENV } from './env';
 
 export const appId = () => driver.isAndroid ? ENV.androidPackage : ENV.iosBundleId;
@@ -59,7 +60,7 @@ export async function tapNotification(text: string, timeout = 90_000) {
     await el.click();
     return;
   }
-  const { width } = await driver.getWindowSize();
+  const { width } = await windowSize();
   await driver.action('pointer', { parameters: { pointerType: 'touch' } })
     .move({ x: Math.round(width * 0.3), y: 5 }).down().pause(100)
     .move({ x: Math.round(width * 0.3), y: 600, duration: 400 }).up().perform();

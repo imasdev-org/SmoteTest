@@ -6,6 +6,13 @@
 
 const isAndroid = () => driver.isAndroid;
 
+let size: { width: number; height: number } | undefined;
+/** Tamaño de la pantalla (no cambia durante la corrida; en el iPhone cada consulta tarda ~1,6 s). */
+export async function windowSize() {
+  size ??= await driver.getWindowSize();
+  return size;
+}
+
 let scale: number | undefined;
 /**
  * Las distancias fijas (márgenes, alturas de fila) se calibraron en píxeles del emulador Android
@@ -13,7 +20,7 @@ let scale: number | undefined;
  */
 export async function px(n: number) {
   if (isAndroid()) return n;
-  scale ??= (await driver.getWindowSize()).width / 1080;
+  scale ??= (await windowSize()).width / 1080;
   return n * scale;
 }
 
@@ -31,13 +38,28 @@ function escapePredicate(s: string) {
   return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+/**
+ * Condición iOS para un texto. En Android el content-desc junta nombre del control y dato
+ * ("Menu Title Mis pedidos", "Product Name Camel Leche ..."); en iOS vienen separados: name/label = "Menu Title",
+ * value = "Mis pedidos". Además del texto entero, se prueba cada corte "nombre" + "dato".
+ */
+function iosTextCond(text: string, op: 'CONTAINS' | 'BEGINSWITH' = 'CONTAINS'): string {
+  const t = escapePredicate(text);
+  const conds = [`label ${op}[c] '${t}'`, `name ${op}[c] '${t}'`, `value ${op}[c] '${t}'`];
+  const words = text.trim().split(/\s+/);
+  for (let i = 1; i < words.length && i <= 5; i++) {
+    const [ctrl, rest] = [words.slice(0, i).join(' '), words.slice(i).join(' ')].map(escapePredicate);
+    conds.push(`(name ==[c] '${ctrl}' AND value ${op}[c] '${rest}')`);
+  }
+  return conds.join(' OR ');
+}
+
 /** Selector por texto visible (contiene, case-insensitive). */
 export function textSelector(text: string): string {
   if (isAndroid()) {
     return `android=new UiSelector().textMatches("(?is).*${escapeRegex(text)}.*")`;
   }
-  const t = escapePredicate(text);
-  return `-ios predicate string:label CONTAINS[c] '${t}' OR name CONTAINS[c] '${t}' OR value CONTAINS[c] '${t}'`;
+  return `-ios predicate string:${iosTextCond(text)}`;
 }
 
 /** Selector por texto exacto (para controles cortos como "+", "-", "2"). */
@@ -49,15 +71,36 @@ export function exactSelector(text: string): string {
   return `-ios predicate string:label == '${t}' OR name == '${t}'`;
 }
 
+/**
+ * iOS: filtra por visibilidad dentro del predicado. Preguntar isDisplayed elemento por elemento cuesta ~1,3 s cada
+ * uno en el iPhone (el menú tiene ~17 "Menu Title"); en el predicado, después de las condiciones de texto, iOS
+ * sólo lo calcula para los que coinciden. (Ojo: `visible` sobre todo el árbol, sin otra condición antes, tarda >1 min.)
+ */
+async function iosVisible(sel: string) {
+  const p = '-ios predicate string:';
+  if (!sel.startsWith(p)) return sel;
+  // Las imágenes de GeneXus dicen visible=false aunque estén en pantalla: para ellas vale estar dentro de la pantalla
+  const { height } = await windowSize();
+  const onScreen = `(type == 'XCUIElementTypeImage' AND rect.y >= 0 AND rect.y < ${Math.round(height)})`;
+  return `${p}(${sel.slice(p.length)}) AND (visible == 1 OR ${onScreen})`;
+}
+
+/** Elementos visibles que matchean el selector (en iOS sin un isDisplayed por elemento). */
+async function displayed(sel: string) {
+  if (!isAndroid()) return [...await $$(await iosVisible(sel))];
+  const out: WebdriverIO.Element[] = [];
+  for (const el of await $$(sel)) if (await el.isDisplayed().catch(() => false)) out.push(el);
+  return out;
+}
+
 /** Primer elemento visible con texto exacto. */
 export async function findExact(texts: string | string[], timeout = 10_000) {
   const list = Array.isArray(texts) ? texts : [texts];
   let found: WebdriverIO.Element | undefined;
   await driver.waitUntil(async () => {
     for (const t of list) {
-      for (const el of await $$(exactSelector(t))) {
-        if (await el.isDisplayed().catch(() => false)) { found = el; return true; }
-      }
+      [found] = await displayed(exactSelector(t));
+      if (found) return true;
     }
     return false;
   }, { timeout, timeoutMsg: `No se encontró ningún elemento con texto exacto: ${list.join(' | ')}` });
@@ -74,15 +117,18 @@ export function regexSelector(pattern: string): string {
 /** Nombre del control que empieza con el prefijo ("Product Name Camel X", "txt Amount 1,0 kg"). */
 export function descPrefixSelector(prefix: string): string {
   if (isAndroid()) return `android=new UiSelector().descriptionStartsWith("${prefix.replace(/"/g, '\\"')}")`;
-  const p = escapePredicate(prefix);
-  return `-ios predicate string:name BEGINSWITH '${p}' OR label BEGINSWITH '${p}'`;
+  return `-ios predicate string:${iosTextCond(prefix, 'BEGINSWITH')}`;
 }
 
 /**
- * Atributo donde GeneXus deja el nombre del control: content-desc en Android; en iOS `name`
- * (accessibilityIdentifier, o el label si no tiene).
+ * Descripción del elemento con el formato de Android ("Fecha 19/10/26", "txt Amount 1,0 kg"): el content-desc,
+ * o en iOS el nombre del control + su valor.
  */
-export const descAttr = () => isAndroid() ? 'content-desc' : 'name';
+export async function descOf(el: WebdriverIO.Element): Promise<string> {
+  if (isAndroid()) return (await el.getAttribute('content-desc')) ?? '';
+  const [name, value] = await Promise.all([el.getAttribute('name'), el.getAttribute('value')]);
+  return value && value !== name ? `${name ?? ''} ${value}`.trim() : name ?? '';
+}
 
 /** Contenedores scrolleables (listas, grillas, carruseles). */
 export const scrollableSelector = () => isAndroid()
@@ -106,13 +152,18 @@ function combinedSelectors(list: string[]): string[] {
       `android=new UiSelector().descriptionMatches("(?is).*(${alt}).*")`,
     ];
   }
-  const cond = list.map(t => { const e = escapePredicate(t); return `label CONTAINS[c] '${e}' OR name CONTAINS[c] '${e}' OR value CONTAINS[c] '${e}'`; }).join(' OR ');
+  const cond = list.map(t => iosTextCond(t)).join(' OR ');
   return [`-ios predicate string:${cond}`];
 }
 
 /** Una pasada (sin esperar): el primer elemento visible que matchee, o undefined. */
 async function findOnce(selectors: string[]) {
   for (const sel of selectors) {
+    if (!isAndroid()) {
+      const [el] = await displayed(sel);
+      if (el) return el;
+      continue;
+    }
     for (const el of await $$(sel)) {
       if (await el.isDisplayed().catch(() => false)) return el;
     }
@@ -187,17 +238,14 @@ export async function findAllByText(texts: string | string[]) {
   const selectors = list.flatMap(t => isAndroid() ? [textSelector(t), descSelector(t)] : [textSelector(t)]);
   const found: { el: WebdriverIO.Element; y: number }[] = [];
   for (const sel of selectors) {
-    for (const el of await $$(sel)) {
-      if (!(await el.isDisplayed().catch(() => false))) continue;
-      found.push({ el, y: (await el.getLocation()).y });
-    }
+    for (const el of await displayed(sel)) found.push({ el, y: (await el.getLocation()).y });
   }
   return found.sort((a, b) => a.y - b.y);
 }
 
 /** Tap en coordenadas relativas a la pantalla (0..1). */
 export async function tapAt(xRatio: number, yRatio: number) {
-  const { width, height } = await driver.getWindowSize();
+  const { width, height } = await windowSize();
   await driver.action('pointer', { parameters: { pointerType: 'touch' } })
     .move({ x: Math.round(width * xRatio), y: Math.round(height * yRatio) }).down().pause(80).up().perform();
   await driver.pause(500);
@@ -214,7 +262,7 @@ export async function tapInside(el: WebdriverIO.Element, xRatio: number, yRatio:
 
 /** Swipe horizontal en una franja (yRatio relativo a la pantalla). 'left' = el contenido avanza. */
 export async function swipeHorizontal(direction: 'left' | 'right', yRatio: number) {
-  const { width, height } = await driver.getWindowSize();
+  const { width, height } = await windowSize();
   const y = Math.round(height * yRatio);
   const [from, to] = direction === 'left' ? [width * 0.85, width * 0.1] : [width * 0.1, width * 0.85];
   await driver.action('pointer', { parameters: { pointerType: 'touch' } })
@@ -225,9 +273,11 @@ export async function swipeHorizontal(direction: 'left' | 'right', yRatio: numbe
 
 /** El contenedor scrolleable más grande de la pantalla (lista, grilla, home). */
 export async function mainScrollable() {
+  // iOS: la home tiene ~48 scrollables (cada carrusel es uno) y recorrerlos tardaba ~3 min en el iPhone:
+  // los gestos de iOS van por coordenadas de pantalla
+  if (!isAndroid()) return undefined;
   let best: { el: WebdriverIO.Element; area: number } | undefined;
   for (const el of await $$(scrollableSelector())) {
-    if (!isAndroid() && !(await el.isDisplayed().catch(() => false))) continue; // iOS deja en el árbol las pantallas de atrás
     const { width, height } = await el.getSize().catch(() => ({ width: 0, height: 0 }));
     if (width * height > (best?.area ?? 0)) best = { el, area: width * height };
   }
@@ -239,17 +289,18 @@ export async function mainScrollable() {
  * 'up' = el dedo sube = el contenido avanza hacia abajo. Devuelve false si ya no se puede seguir.
  */
 export async function swipe(direction: 'up' | 'down', percent = 0.6): Promise<boolean> {
-  const el = await mainScrollable();
-  if (el && !isAndroid()) {
-    // iOS no tiene scrollGesture: arrastre lento (dragFromToForDuration) para que no siga por inercia
-    const r = await driver.getElementRect(el.elementId);
-    const x = Math.round(r.x + r.width / 2);
-    const dist = r.height * 0.55 * Math.min(percent * 1.5, 1);
-    const [from, to] = [r.y + r.height * 0.75, r.y + r.height * 0.75 - dist];
+  if (!isAndroid()) {
+    // iOS no tiene scrollGesture: arrastre sin inercia en el centro de la pantalla. Arranca debajo del header y
+    // termina arriba de la barra de abajo
+    const { width, height } = await windowSize();
+    const x = Math.round(width / 2);
+    const dist = height * 0.5 * Math.min(percent * 1.5, 1);
+    const [from, to] = [height * 0.78, height * 0.78 - dist];
     const [y1, y2] = direction === 'up' ? [from, to] : [to, from];
-    await driver.execute('mobile: dragFromToForDuration', { duration: 0.1, fromX: x, fromY: Math.round(y1), toX: x, toY: Math.round(y2) });
+    await iosDrag(x, y1, x, y2);
     return true;
   }
+  const el = await mainScrollable();
   if (el) {
     // Gesto dentro de la zona central del scrollable: si arranca sobre el header o la barra fija de abajo
     // ("Agregar al carrito" del detalle) no se mueve nada
@@ -262,7 +313,7 @@ export async function swipe(direction: 'up' | 'down', percent = 0.6): Promise<bo
   }
   // Sin scrollable (o iOS): gesto sobre la zona central de la pantalla
   if (isAndroid()) {
-    const { width, height } = await driver.getWindowSize();
+    const { width, height } = await windowSize();
     return driver.execute('mobile: scrollGesture', {
       left: Math.round(width * 0.1), top: Math.round(height * 0.25), width: Math.round(width * 0.8), height: Math.round(height * 0.5),
       direction: direction === 'up' ? 'down' : 'up', percent: Math.min(percent * 1.5, 1),
@@ -279,8 +330,10 @@ export async function swipe(direction: 'up' | 'down', percent = 0.6): Promise<bo
  */
 export async function quickSwipe(direction: 'up' | 'down') {
   const el = await mainScrollable();
-  if (!el) return swipe(direction, 0.7);
-  const r = await driver.getElementRect(el.elementId);
+  if (!el && isAndroid()) return swipe(direction, 0.7);
+  // iOS: dentro de la zona central de la pantalla (debajo del header)
+  const screen = await windowSize();
+  const r = el ? await driver.getElementRect(el.elementId) : { x: 0, y: screen.height * 0.15, width: screen.width, height: screen.height * 0.7 };
   const x = Math.round(r.x + r.width / 2);
   const [from, to] = [Math.round(r.y + r.height * 0.25), Math.round(r.y + r.height * 0.8)];
   const [y1, y2] = direction === 'down' ? [from, to] : [to, from];
@@ -292,9 +345,29 @@ export async function quickSwipe(direction: 'up' | 'down') {
 
 /** Swipe horizontal sobre un elemento (carrusel, días): 'left' = avanza. */
 export async function swipeElement(el: WebdriverIO.Element, direction: 'left' | 'right', percent = 0.75) {
-  await driver.execute(isAndroid() ? 'mobile: swipeGesture' : 'mobile: swipe', isAndroid()
-    ? { elementId: el.elementId, direction, percent }
-    : { elementId: el.elementId, direction });
+  if (isAndroid()) {
+    await driver.execute('mobile: swipeGesture', { elementId: el.elementId, direction, percent });
+    return;
+  }
+  // iOS: arrastre horizontal a la altura del elemento (en iOS `el` es el propio elemento, no su contenedor:
+  // ver scrollableContaining). `mobile: swipe` sobre un elemento chico no mueve el carrusel
+  const r = await driver.getElementRect(el.elementId);
+  const { width } = await windowSize();
+  const y = Math.round(r.y + r.height / 2);
+  const [a, b] = [width * (0.5 + percent / 2), width * (0.5 - percent / 2)].map(Math.round);
+  const [x1, x2] = direction === 'left' ? [a, b] : [b, a];
+  await iosDrag(x1, y, x2, y);
+}
+
+/**
+ * iOS: arrastre sin inercia (se frena antes de soltar). `mobile: dragFromToForDuration` tardaba ~8 s en el iPhone;
+ * las acciones W3C, ~1,5 s.
+ */
+async function iosDrag(x1: number, y1: number, x2: number, y2: number) {
+  await driver.action('pointer', { parameters: { pointerType: 'touch' } })
+    .move({ x: Math.round(x1), y: Math.round(y1) }).down().pause(100)
+    .move({ x: Math.round(x2), y: Math.round(y2), duration: 400 }).pause(200).up().perform();
+  await driver.pause(300);
 }
 
 /** Contenedor horizontal scrolleable que contiene al elemento con ese content-desc / texto. */
@@ -303,6 +376,8 @@ export async function scrollableContaining(selector: string) {
   // UiAutomator2 a veces devuelve otro carrusel. Se busca el elemento y el scrollable más chico que lo contiene.
   const target = await $(selector);
   if (!(await target.isExisting())) return undefined;
+  // iOS: recorrer los ~48 scrollables tarda minutos; swipeElement desliza a la altura del propio elemento
+  if (!isAndroid()) return target;
   const t = await driver.getElementRect(target.elementId);
   const cx = t.x + t.width / 2, cy = t.y + t.height / 2;
   let best: { el: WebdriverIO.Element; area: number } | undefined;
@@ -330,8 +405,11 @@ function decodeXml(s: string) {
 /** Textos visibles de la pantalla actual. */
 export async function visibleTexts(): Promise<string[]> {
   const src = await driver.getPageSource();
-  const re = isAndroid() ? /\btext="([^"]+)"/g : /\blabel="([^"]+)"/g;
-  return [...src.matchAll(re)].map(m => decodeXml(m[1]));
+  if (isAndroid()) return [...src.matchAll(/\btext="([^"]+)"/g)].map(m => decodeXml(m[1]));
+  // iOS: el texto está en value (si no, en label)
+  return [...src.matchAll(/<XCUIElementType\w+ [^>]*>/g)]
+    .map(m => (m[0].match(/ value="([^"]*)"/) ?? m[0].match(/ label="([^"]*)"/))?.[1] ?? '')
+    .filter(Boolean).map(decodeXml);
 }
 
 /** Espera a que desaparezcan los indicadores de carga de GeneXus. */

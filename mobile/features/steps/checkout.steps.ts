@@ -4,7 +4,7 @@ import { ENV, PASSCARD, USER } from '../../support/env';
 import { T } from '../../support/texts';
 import { inWebview, tapNotification } from '../../support/app';
 import {
-  descAttr, findAllByText, findByText, findExact, isVisibleText, px, regexSelector, scrollToText, scrollableContaining, swipeElement, tapText, tapTextIfVisible,
+  descOf, findAllByText, findByText, findExact, isVisibleText, px, regexSelector, scrollToText, scrollableContaining, swipeElement, tapText, tapTextIfVisible,
   visibleTexts, waitForLoading, screenshot,
 } from '../../support/ui';
 import { enterSuperFromSelector, isWorldSelectorOpen, firstMinus, firstPlus, openCart, scrollToButton, tapButton } from '../../support/flows';
@@ -95,7 +95,7 @@ When('elijo la fecha de entrega más lejana', async () => {
   await tapButton(T.continuar[0]);
   if (await tapTextIfVisible(['ACEPTAR', 'Aceptar'], 2_000)) throw new Error('La app no tomó el horario ("Seleccioná un rango horario de entrega")');
   const fecha = await findByText(T.fecha);
-  console.log(`Fecha elegida: ${await fecha.getAttribute(descAttr())}`);
+  console.log(`Fecha elegida: ${await descOf(fecha)}`);
 });
 
 When('continúo a forma de pago', async () => {
@@ -212,7 +212,7 @@ When('elijo {int} cuotas', async (n: number) => {
   // iOS (sin calibrar): el combo de GeneXus es un botón / campo en la misma fila que abre un picker o una lista
   const spinnerSel = driver.isAndroid
     ? 'android=new UiSelector().className("android.widget.Spinner")'
-    : "-ios predicate string:type IN {'XCUIElementTypeButton', 'XCUIElementTypeTextField'} AND visible == true";
+    : "-ios predicate string:type IN {'XCUIElementTypeButton', 'XCUIElementTypeTextField'}";
   const [row, labelX] = [await px(100), (await label.getLocation()).x];
   let spinner: WebdriverIO.Element | undefined;
   for (const sp of await $$(spinnerSel)) {

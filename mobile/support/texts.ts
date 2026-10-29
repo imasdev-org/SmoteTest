@@ -8,7 +8,7 @@
  */
 export const T = {
   // Onboarding / login
-  iniciarSesion: ['Iniciar sesión'],
+  iniciarSesion: ['Iniciar sesión', 'Ingresar'],   // iOS: el menú sin sesión muestra el botón "Ingresar"
   usuario: ['Usuario / e-mail', 'Usuario'],
   password: ['Contraseña'],
   ingresar: ['Ingresar'],

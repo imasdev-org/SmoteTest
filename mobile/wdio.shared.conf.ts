@@ -10,12 +10,13 @@ import type { Options } from '@wdio/types';
  *   APP           ruta al .apk / .app / .ipa a instalar (opcional si la app ya está instalada)
  *   APP_VERSION   versión esperada para "Validar incremento de versión" (opcional)
  *   TAGS          expresión de tags de Cucumber, ej: "@smoke and not @manual"
+ *   WDIO_LOG      nivel de log de WDIO (default warn; info muestra cada comando con su hora)
  */
 export const sharedConfig: Options.Testrunner = {
   runner: 'local',
   specs: ['./features/**/*.feature'],
   maxInstances: 1,
-  logLevel: 'warn',
+  logLevel: (process.env.WDIO_LOG as any) || 'warn',
   bail: 0,
   waitforTimeout: 20_000,
   // Los helpers toman el primer match (ej. el "+" de la primera tarjeta): sin esto WDIO 10 falla con varios matches

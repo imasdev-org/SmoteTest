@@ -10,9 +10,10 @@
 import { USER } from './env';
 import { T } from './texts';
 import { ctx } from './context';
+import { dominantColor } from './color';
 import {
-  descAttr, findAllByText, findByText, findInput, isVisibleNow, isVisibleText, px, quickSwipe, regexSelector, swipe, swipeElement,
-  tapText, tapTextIfVisible, textSelector, typeInto, waitForLoading,
+  descOf, findAllByText, findByText, findInput, isVisibleNow, isVisibleText, px, quickSwipe, regexSelector, swipe, swipeElement,
+  tapText, tapTextIfVisible, textSelector, typeInto, waitForLoading, windowSize,
 } from './ui';
 
 
@@ -43,6 +44,17 @@ export async function scrollToButton(text: string, maxSwipes = 8) {
   return findButton(text, 2_000);
 }
 
+/**
+ * Toque en el centro del elemento. En iOS element.click() sobre controles de GeneXus que XCUITest considera
+ * invisibles (logo, imágenes) no hace nada o toca otra cosa: se toca por coordenadas.
+ */
+export async function tapElement(el: WebdriverIO.Element) {
+  if (driver.isAndroid) return el.click();
+  const r = await driver.getElementRect(el.elementId);
+  await driver.action('pointer', { parameters: { pointerType: 'touch' } })
+    .move({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }).down().pause(80).up().perform();
+}
+
 // --- Header ---
 //
 // Los íconos del header (menú, selector de mundo, carrito) no tienen id ni content-desc. Se ubican por
@@ -51,9 +63,11 @@ export async function scrollToButton(text: string, maxSwipes = 8) {
 
 const HEADER_XPATH = "//*[android.widget.FrameLayout[@clickable='true']][*[.//*[@content-desc='Channel Logo'] or .//android.widget.EditText]]";
 
-// iOS (sin calibrar): XCUITest no expone "clickable" ni la jerarquía de FrameLayouts. Se toman los
-// botones / imágenes tocables de la franja superior de la pantalla, ordenados de izquierda a derecha.
-const IOS_HEADER_SEL = "-ios predicate string:type IN {'XCUIElementTypeButton', 'XCUIElementTypeImage', 'XCUIElementTypeOther'} AND accessible == true AND visible == true";
+// iOS: XCUITest no expone "clickable". Los íconos del header (menú, carrito y, en la home, el escáner) son
+// contenedores de 44x44 puntos con una imagen adentro. Relevado en iPhone 8 / iOS 16.7, prod 38.1086.
+// Ojo: filtrar por `visible` o `accessible` en el predicado obliga a iOS a calcularlo en todo el árbol
+// (~1100 elementos): esa búsqueda tardaba 73 s en el iPhone; por tamaño tarda ~5 s.
+const iosHeaderSel = (maxY: number, extra = '') => `-ios predicate string:type == 'XCUIElementTypeOther' AND rect.width == 44 AND rect.height == 44 AND rect.y < ${Math.round(maxY)}${extra}`;
 
 async function headerButtons() {
   const buttons: { el: WebdriverIO.Element; x: number; y: number }[] = [];
@@ -63,13 +77,9 @@ async function headerButtons() {
       buttons.push({ el, x, y });
     }
   } else {
-    const { height } = await driver.getWindowSize();
-    for (const el of await $$(IOS_HEADER_SEL)) {
-      if ((await el.getAttribute('name')) === 'Channel Logo') continue;
+    const { height } = await windowSize();
+    for (const el of await $$(iosHeaderSel(height * 0.2))) {
       const { x, y } = await el.getLocation();
-      const { width: w } = await el.getSize();
-      // Íconos: chicos y arriba (debajo de la status bar)
-      if (y > height * 0.15 || y < 20 || w > 80) continue;
       buttons.push({ el, x, y });
     }
   }
@@ -83,8 +93,10 @@ async function headerButtons() {
 /** Menú (izquierda), logo / selector de mundo (centro) o carrito (derecha) del header. */
 export async function headerButton(which: 'menu' | 'mundo' | 'carrito') {
   if (which === 'mundo' && !driver.isAndroid) {
-    // iOS (sin calibrar): el logo mismo
-    const logo = await $('~Channel Logo');
+    // iOS: el logo mismo (desc "Channel Logo"). Hay dos en el árbol (header y menú lateral): el del header está
+    // arriba, al centro
+    const { width, height } = await windowSize();
+    const logo = await $(`-ios predicate string:name == 'Channel Logo' AND rect.y < ${Math.round(height * 0.15)} AND rect.x > ${Math.round(width * 0.2)}`);
     if (!(await logo.isExisting())) throw new Error('No encontré el logo / selector de mundo en el header');
     return logo;
   }
@@ -94,6 +106,14 @@ export async function headerButton(which: 'menu' | 'mundo' | 'carrito') {
     if (!logos.length) throw new Error('No encontré el logo / selector de mundo en el header');
     return logos[logos.length - 1];
   }
+  if (!driver.isAndroid) {
+    // Una sola búsqueda: el menú es el ícono de la izquierda y el carrito el de la derecha en la primera fila
+    // (el escáner de la home está debajo del carrito). Cada consulta de posición cuesta ~1,3 s en el iPhone
+    const { width, height } = await windowSize();
+    const el = await $(iosHeaderSel(height * 0.15, which === 'menu' ? ` AND rect.x < ${Math.round(width / 4)}` : ` AND rect.x > ${Math.round(width * 3 / 4)}`));
+    if (!(await el.isExisting())) throw new Error('No encontré el header de la app (menú / carrito)');
+    return el;
+  }
   const row = await headerButtons();
   return which === 'menu' ? row[0].el : row[row.length - 1].el;
 }
@@ -102,7 +122,9 @@ export async function openMenu() {
   // El tap se pierde si llega mientras la home recarga o el drawer se está cerrando
   for (let i = 0; i < 3; i++) {
     await (await headerButton('menu')).click();
-    if (await isVisibleText([...T.usuarioLogueado, ...T.menuMisPedidos], 4_000)) return;
+    // En el iPhone cada búsqueda tarda ~5 s y la primera, con el menú animándose, no lo ve: con 4 s de espera se
+    // volvía a tocar el menú mientras abría
+    if (await isVisibleText([...T.usuarioLogueado, ...T.menuMisPedidos, ...T.iniciarSesion], driver.isAndroid ? 4_000 : 20_000)) return;
   }
   await findByText([...T.usuarioLogueado, ...T.iniciarSesion, ...T.menuMisPedidos], 5_000);
 }
@@ -115,13 +137,21 @@ export async function closeOverlay() {
 }
 
 /**
- * iOS no tiene botón atrás del sistema. Se toca el "atrás" de la barra de navegación y, si no hay,
- * se hace el gesto desde el borde izquierdo (sin calibrar).
+ * iOS no tiene botón atrás del sistema. Las pantallas de GeneXus (detalle, "Ver todos") tienen su propia flecha "<":
+ * un contenedor de 48x48 arriba a la izquierda (relevado en el detalle, iPhone 8). Si no está, el "atrás" de una
+ * barra de navegación nativa y, por último, el gesto desde el borde izquierdo.
  */
 async function iosBack() {
+  const arrow = await $("-ios predicate string:type == 'XCUIElementTypeOther' AND rect.width == 48 AND rect.height == 48 AND rect.x < 30 AND rect.y < 60");
+  if (await arrow.isExisting()) {
+    const r = await driver.getElementRect(arrow.elementId);
+    await driver.action('pointer', { parameters: { pointerType: 'touch' } })
+      .move({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }).down().pause(80).up().perform();
+    return;
+  }
   const navBack = await $('-ios class chain:**/XCUIElementTypeNavigationBar/XCUIElementTypeButton[1]');
-  if (await navBack.isDisplayed().catch(() => false)) return navBack.click();
-  const { width, height } = await driver.getWindowSize();
+  if (await navBack.isExisting()) return navBack.click();
+  const { width, height } = await windowSize();
   const y = Math.round(height / 2);
   await driver.action('pointer', { parameters: { pointerType: 'touch' } })
     .move({ x: 2, y }).down().move({ x: Math.round(width * 0.7), y, duration: 300 }).up().perform();
@@ -144,6 +174,29 @@ export async function scrollHomeToTop() {
   for (let i = 0; i < 12 && !(await isVisibleNow([...T.home, ...T.homeExpress])); i++) await quickSwipe('down');
 }
 
+/**
+ * ¿La app está en la home de Express? Android: la franja de entrega de Express (T.homeExpress).
+ * iOS: la home de Express no tiene ningún texto ni nombre de control propio; el ícono del menú es rojo en Express
+ * y azul en Super (medido en el iPhone 8: rojo 238/96/96, azul 75/121/184).
+ */
+export async function isExpressHome() {
+  if (driver.isAndroid) return isVisibleNow(T.homeExpress);
+  const menu = await headerButton('menu').catch(() => undefined);
+  if (!menu) return false;
+  const { r, b, n } = await dominantColor(menu).catch(() => ({ r: 0, b: 0, n: 0 }));
+  return n > 50 && r > b + 60;
+}
+
+/** Espera la home de Express (o alguno de los textos de `orTexts`). Devuelve false si no aparece. */
+export async function waitForExpressHome(timeout: number, orTexts: string[] = []) {
+  return driver.waitUntil(async () => await isExpressHome() || (orTexts.length > 0 && await isVisibleNow(orTexts)),
+    { timeout, interval: 1_000 }).then(() => true, () => false);
+}
+
+export async function expectExpressHome(timeout = 60_000) {
+  if (!(await waitForExpressHome(timeout))) throw new Error('No cargó la home de Express');
+}
+
 /** Cierra un drawer haciendo swipe sobre un elemento del propio drawer (no sobre el fondo). */
 async function swipeDrawer(anchorTexts: string[], direction: 'left' | 'right') {
   const anchor = await findByText(anchorTexts, 5_000);
@@ -153,6 +206,16 @@ async function swipeDrawer(anchorTexts: string[], direction: 'left' | 'right') {
 
 /** Cierra el menú lateral (swipe a la izquierda sobre el menú). */
 export async function closeMenu() {
+  if (!driver.isAndroid) {
+    // iOS: el menú ocupa ~3/4 de la pantalla desde la izquierda. Buscar un texto del menú para deslizar sobre él
+    // costaba ~20 s en el iPhone; se desliza por coordenadas dentro del menú
+    const { width, height } = await windowSize();
+    const y = Math.round(height / 2);
+    await driver.action('pointer', { parameters: { pointerType: 'touch' } })
+      .move({ x: Math.round(width * 0.6), y }).down().move({ x: Math.round(width * 0.05), y, duration: 250 }).up().perform();
+    await driver.pause(500);
+    return;
+  }
   await swipeDrawer([...T.menuMisPedidos, ...T.usuarioLogueado, 'Menu Title'], 'left');
 }
 
@@ -168,7 +231,7 @@ export async function openCart() {
 
 /** Número del badge del carrito (0 si no hay badge). */
 export async function cartCount(): Promise<number> {
-  const { width, height } = await driver.getWindowSize();
+  const { width, height } = await windowSize();
   for (const el of await $$(regexSelector('^[0-9]+$'))) {
     const { x, y } = await el.getLocation();
     if (x > width * 0.85 && y < height * 0.12) return parseInt(await el.getText(), 10);
@@ -194,23 +257,39 @@ export async function waitForAppReady(timeout = 120_000) {
 
 const worldTileSel = () => driver.isAndroid ? 'android=new UiSelector().description("image")' : `-ios predicate string:label == 'image' OR name == 'image'`;
 
+/**
+ * iOS: tiles del selector (imágenes "image" altas en la mitad de arriba; Super y Express miden 171x220 en el iPhone 8).
+ * Las imágenes de GeneXus dicen visible=false, así que no se puede esperar con waitForDisplayed. Los banners de la
+ * home también se llaman "image" pero son más bajos (~133).
+ */
+async function iosWorldTiles() {
+  const { height } = await windowSize();
+  const tiles: { el: WebdriverIO.Element; x: number; y: number }[] = [];
+  for (const el of await $$(`-ios predicate string:name == 'image' AND rect.height > 180 AND rect.y >= 0 AND rect.y < ${Math.round(height * 0.5)}`)) {
+    const { x, y } = await el.getLocation();
+    tiles.push({ el, x, y });
+  }
+  return tiles.sort((a, b) => a.y - b.y || a.x - b.x);
+}
+
 /** El selector de mundos son tiles con desc "image" (sin la barra de domicilio de la home). */
 export async function isWorldSelectorOpen() {
   // Una home scrolleada no muestra la barra de domicilio pero sí carruseles, y sus banners también
   // tienen desc "image": no confundirla con el selector
   if (await isVisibleText(T.home, 1_000) || await isVisibleNow([...T.homeExpress, 'Prod List Title'])) return false;
+  if (!driver.isAndroid) return (await iosWorldTiles()).length >= 2;
   return (await $$(worldTileSel())).length >= 2;
 }
 
 /** Elige el primer tile del selector (Super / "Tienda Inglesa", igual en trunk y prod). */
 export async function enterSuperFromSelector() {
-  const tiles: { el: WebdriverIO.Element; x: number; y: number }[] = [];
-  for (const el of await $$(worldTileSel())) {
+  const tiles: { el: WebdriverIO.Element; x: number; y: number }[] = driver.isAndroid ? [] : await iosWorldTiles();
+  for (const el of driver.isAndroid ? await $$(worldTileSel()) : []) {
     const { x, y } = await el.getLocation();
     tiles.push({ el, x, y });
   }
   tiles.sort((a, b) => a.y - b.y || a.x - b.x);
-  await tiles[0].el.click();
+  await tapElement(tiles[0].el);
   await waitForLoading();
   await chooseAddressForWorld('Super');
   await findByText(T.home, 30_000);
@@ -298,6 +377,15 @@ export async function firstMinus() {
  * (el hijo del "Var Product Image") en lugar del centro del contenedor.
  */
 export async function openDetailFromImage(container: WebdriverIO.Element) {
+  if (!driver.isAndroid) {
+    // iOS: las imágenes de GeneXus dicen visible=false y element.click() no abre el detalle (el toque cae en otro
+    // lado y la home vuelve arriba). Tap por coordenadas en el centro de la imagen
+    const r = await driver.getElementRect(container.elementId);
+    await driver.action('pointer', { parameters: { pointerType: 'touch' } })
+      .move({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }).down().pause(80).up().perform();
+    await waitForLoading();
+    return;
+  }
   const photo = container.$(driver.isAndroid ? 'android=new UiSelector().className("android.widget.ImageView")' : '-ios class chain:**/XCUIElementTypeImage');
   if (await photo.isExisting().catch(() => false)) await photo.click();
   else await container.click();
@@ -308,26 +396,31 @@ export async function openDetailFromImage(container: WebdriverIO.Element) {
 
 /** Abre el selector de mundos (logo del header) y elige uno por posición. */
 export async function selectWorld(world: typeof T.mundos[number]) {
-  await (await headerButton('mundo')).click();
+  await tapElement(await headerButton('mundo'));
   await chooseWorldInSelector(world);
 }
 
 /** Elige un mundo en el selector ya abierto (desde el logo del header o el que aparece al abrir la app). */
 export async function chooseWorldInSelector(world: typeof T.mundos[number]) {
-  const sel = driver.isAndroid ? 'android=new UiSelector().description("image")' : `-ios predicate string:label == 'image' OR name == 'image'`;
-  await $(sel).waitForDisplayed({ timeout: 10_000, timeoutMsg: 'No se abrió el selector de mundos' });
-  const { height } = await driver.getWindowSize();
-  const tiles: { el: WebdriverIO.Element; x: number; y: number }[] = [];
-  for (const el of await $$(sel)) {
-    const { x, y } = await el.getLocation();
-    if (y < height * 0.5 && await el.isDisplayed()) tiles.push({ el, x, y });
+  let tiles: { el: WebdriverIO.Element; x: number; y: number }[] = [];
+  if (driver.isAndroid) {
+    const sel = worldTileSel();
+    await $(sel).waitForDisplayed({ timeout: 10_000, timeoutMsg: 'No se abrió el selector de mundos' });
+    const { height } = await windowSize();
+    for (const el of await $$(sel)) {
+      const { x, y } = await el.getLocation();
+      if (y < height * 0.5 && await el.isDisplayed()) tiles.push({ el, x, y });
+    }
+    tiles.sort((a, b) => a.y - b.y || a.x - b.x);
+  } else {
+    await driver.waitUntil(async () => (tiles = await iosWorldTiles()).length >= 2,
+      { timeout: 15_000, interval: 500, timeoutMsg: 'No se abrió el selector de mundos' });
   }
-  tiles.sort((a, b) => a.y - b.y || a.x - b.x);
   // Super y Express son los dos primeros tiles en todos los ambientes (prod agrega un banner en el medio)
   const idx = T.mundos.indexOf(world);
   if (idx > 1) throw new Error(`El selector de mundos sólo se automatiza para Super y Express (pedido: ${world})`);
   if (!tiles[idx]) throw new Error(`El selector de mundos tiene ${tiles.length} opciones, no encontré "${world}"`);
-  await tiles[idx].el.click();
+  await tapElement(tiles[idx].el);
   await waitForLoading();
   await chooseAddressForWorld(world);
 }
@@ -382,7 +475,7 @@ export async function confirmCancelDialog() {
 
 export async function cancelOrder(orderNumber: string) {
   const y = await scrollToOrder(orderNumber);
-  const { height } = await driver.getWindowSize();
+  const { height } = await windowSize();
   if (y > height * 0.6) { await swipe('up', 0.3); }
   const orderY = await scrollToOrder(orderNumber, 1);
   const nextOrderY = (await findAllByText('Pedido N')).map(o => o.y).find(oy => oy > orderY + 10) ?? Infinity;
@@ -421,7 +514,7 @@ export async function cancelAllPendingOrders(maxSwipes = 25) {
     const dates = await findAllByText(['Fecha ']);
     const dateAt = async (y: number) => {
       const above = dates.filter(d => d.y < y).pop();
-      return above ? ((await above.el.getAttribute(descAttr())) ?? '').replace('Fecha ', '').trim() : '';
+      return above ? (await descOf(above.el)).replace('Fecha ', '').trim() : '';
     };
     let acted = false;
     for (const btn of await findAllByText(T.cancelarPedido)) {
@@ -434,7 +527,7 @@ export async function cancelAllPendingOrders(maxSwipes = 25) {
     }
     if (acted) continue;
     // Si ya aparecen pedidos de días anteriores a hoy, no hay más pendientes de hoy
-    const keys = await Promise.all(dates.map(d => d.el.getAttribute(descAttr())));
+    const keys = await Promise.all(dates.map(d => descOf(d.el)));
     if (keys.some(k => k && toKey(k.replace('Fecha ', '').trim()) < toKey(todayStr))) break;
     const before = await driver.getPageSource();
     await swipe('up', 0.7);

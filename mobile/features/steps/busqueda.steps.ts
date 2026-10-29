@@ -1,6 +1,6 @@
 import { Then } from '@wdio/cucumber-framework';
 import { expect } from '@wdio/globals';
-import { findAllByText, waitForLoading } from '../../support/ui';
+import { findAllByText, waitForLoading, windowSize } from '../../support/ui';
 
 Then('la grilla está al principio', async () => {
   await waitForLoading();
@@ -9,7 +9,7 @@ Then('la grilla está al principio', async () => {
   // Si la grilla quedó al principio, la primera tarjeta está en la parte de arriba de la pantalla
   // (no se usa un swipe hacia abajo: dispara el "pull to refresh" y cambia los productos)
   const [first] = await findAllByText(['Var Product Image']);
-  const { height } = await driver.getWindowSize();
+  const { height } = await windowSize();
   console.log(`Primera tarjeta en y=${first?.y} (pantalla ${height})`);
   expect(first).toBeDefined();
   expect(first.y).toBeLessThan(height * 0.4);

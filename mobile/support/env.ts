@@ -5,10 +5,10 @@
 type EnvName = 'trunk' | 'staging' | 'preprod' | 'prod';
 
 const ENVS: Record<EnvName, { androidPackage: string; iosBundleId: string; productoFinanciable: string }> = {
-  trunk:   { androidPackage: 'com.imasdev.tiendatrunk',   iosBundleId: '', productoFinanciable: 'camara digital nikon' },
-  staging: { androidPackage: 'com.imasdev.tiendastaging', iosBundleId: '', productoFinanciable: 'camara digital nikon' },
-  preprod: { androidPackage: 'com.imasdev.tiendapreprod', iosBundleId: '', productoFinanciable: 'pilas' },
-  prod:    { androidPackage: 'com.imasdev.tiendainglesa', iosBundleId: '', productoFinanciable: 'pilas' },
+  trunk:   { androidPackage: 'com.imasdev.tiendatrunk',   iosBundleId: 'com.imasdev.tiendatrunk', productoFinanciable: 'camara digital nikon' },
+  staging: { androidPackage: 'com.imasdev.tiendastaging', iosBundleId: 'com.imasdev.tiendastaging', productoFinanciable: 'camara digital nikon' },
+  preprod: { androidPackage: 'com.imasdev.tiendapreprod', iosBundleId: 'com.imasdev.tiendapreprod', productoFinanciable: 'pilas' },
+  prod:    { androidPackage: 'com.imasdev.tiendainglesa', iosBundleId: 'uy.com.imasdev.tiendainglesa', productoFinanciable: 'pilas' },
 };
 
 const name = (process.env.TEST_ENV || 'preprod') as EnvName;
