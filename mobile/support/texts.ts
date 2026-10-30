@@ -34,6 +34,7 @@ export const T = {
   // Carrito (panel lateral)
   pagar: ['Pagar'],
   vaciarCarrito: ['Vaciar carrito'],
+  carritoSinProductos: ['No tienes productos en el carrito'],
   pedidoNuevo: ['No, quiero uno nuevo', 'pedido nuevo'],
   topeCarrito: ['límite de unidades'],      // Express: "Ooops, ¡has llegado al límite de unidades para tu pedido express!" (16/16)
   irAPagar: ['Ir a pagar'],

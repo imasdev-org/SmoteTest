@@ -12,7 +12,7 @@ import { T } from './texts';
 import { ctx } from './context';
 import { dominantColor } from './color';
 import {
-  descOf, findAllByText, findByText, findInput, isVisibleNow, isVisibleText, px, quickSwipe, regexSelector, swipe, swipeElement,
+  descOf, findAllByText, findByText, findExact, findInput, isVisibleNow, isVisibleText, px, quickSwipe, regexSelector, swipe, swipeElement,
   tapText, tapTextIfVisible, textSelector, typeInto, waitForLoading, windowSize,
 } from './ui';
 
@@ -111,8 +111,16 @@ export async function headerButton(which: 'menu' | 'mundo' | 'carrito') {
     // (el escáner de la home está debajo del carrito). Cada consulta de posición cuesta ~1,3 s en el iPhone
     const { width, height } = await windowSize();
     const el = await $(iosHeaderSel(height * 0.15, which === 'menu' ? ` AND rect.x < ${Math.round(width / 4)}` : ` AND rect.x > ${Math.round(width * 3 / 4)}`));
-    if (!(await el.isExisting())) throw new Error('No encontré el header de la app (menú / carrito)');
-    return el;
+    if (await el.isExisting()) return el;
+    // Resultados de búsqueda / detalle: el carrito es un contenedor de 42x42 arriba a la derecha
+    if (which === 'carrito') {
+      const cart = await $(`-ios predicate string:type == 'XCUIElementTypeOther' AND rect.width >= 40 AND rect.width <= 48 AND rect.height >= 40 AND rect.height <= 48 AND rect.y < ${Math.round(height * 0.15)} AND rect.x > ${Math.round(width * 3 / 4)}`);
+      if (await cart.isExisting()) return cart;
+    }
+    // Pantallas del menú (Mis pedidos...): barra de navegación nativa con "nav menu icon" y "tiendaios7 ico cart ..."
+    const nav = await $(`-ios predicate string:type == 'XCUIElementTypeButton' AND name ${which === 'menu' ? "== 'nav menu icon'" : "CONTAINS 'cart'"}`);
+    if (await nav.isExisting()) return nav;
+    throw new Error('No encontré el header de la app (menú / carrito)');
   }
   const row = await headerButtons();
   return which === 'menu' ? row[0].el : row[row.length - 1].el;
@@ -149,7 +157,8 @@ async function iosBack() {
       .move({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }).down().pause(80).up().perform();
     return;
   }
-  const navBack = await $('-ios class chain:**/XCUIElementTypeNavigationBar/XCUIElementTypeButton[1]');
+  // (El primer botón de la barra nativa de "Mis pedidos" es el menú, no un "atrás")
+  const navBack = await $("-ios predicate string:type == 'XCUIElementTypeButton' AND name != 'nav menu icon' AND NOT (name CONTAINS 'cart') AND rect.x < 60 AND rect.y < 70");
   if (await navBack.isExisting()) return navBack.click();
   const { width, height } = await windowSize();
   const y = Math.round(height / 2);
@@ -159,6 +168,13 @@ async function iosBack() {
 
 /** Vuelve de una pantalla abierta desde el menú (Mis pedidos...): la app regresa con el drawer abierto. */
 export async function backToHome() {
+  if (!driver.isAndroid) {
+    // iOS: las pantallas del menú (Mis pedidos...) son de primer nivel, sin "atrás": se vuelve con menú → Inicio
+    await openMenu();
+    await tapElement(await findExact(['Inicio'], 10_000)); // en iOS el ítem se llama "Inicio" (no "Menu Title Inicio")
+    await findByText(T.appCargada, 15_000);
+    return;
+  }
   await closeOverlay();
   if (await isVisibleText(T.usuarioLogueado, 1_500)) await closeMenu();
   await findByText(T.appCargada, 15_000);
@@ -221,6 +237,15 @@ export async function closeMenu() {
 
 /** Cierra el panel del carrito (swipe a la derecha sobre el panel). */
 export async function closeCart() {
+  if (!driver.isAndroid) {
+    // iOS: el panel no se cierra deslizando. Con el panel abierto el header de la home queda corrido a la izquierda
+    // y su ícono del carrito (44x44, x≈41) sigue a la vista: tocarlo cierra el panel
+    const { width } = await windowSize();
+    const cart = await $(iosHeaderSel(60, ` AND rect.x >= 0 AND rect.x < ${Math.round(width / 2)}`));
+    if (await cart.isExisting()) await tapElement(cart);
+    await driver.pause(800);
+    return;
+  }
   await swipeDrawer([...T.vaciarCarrito, 'Product Name Camel', ...T.pagar], 'right');
 }
 
@@ -342,7 +367,7 @@ export async function logout() {
   await openMenu();
   for (let i = 0; i < 6 && !(await isVisibleText(T.cerrarSesion, 1_000)); i++) await swipe('up');
   await tapText(T.cerrarSesion);
-  await tapTextIfVisible(['Sí', 'Aceptar', ...T.cerrarSesion], 3_000);
+  await acceptDialog(['Sí', 'Aceptar', ...T.cerrarSesion], 3_000);
   await waitForLoading();
   sessionState = 'anonimo';
 }
@@ -356,17 +381,39 @@ export async function search(term: string) {
   ctx.lastSearch = term;
 }
 
+/** El elemento de más arriba (y, a igual fila, el de más a la izquierda). */
+async function topLeft(els: WebdriverIO.Element[]) {
+  if (els.length <= 1) return els[0];
+  const withPos = await Promise.all(els.map(async el => ({ el, ...(await el.getLocation()) })));
+  const row = await px(60);
+  return withPos.sort((a, b) => (Math.abs(a.y - b.y) < row ? a.x - b.x : a.y - b.y))[0].el;
+}
+
 /** "+" de la primera tarjeta de producto visible. */
 export async function firstPlus() {
-  const sel = driver.isAndroid ? 'android=new UiSelector().text("+")' : `-ios predicate string:label == '+' OR name == '+'`;
-  const el = await $(sel);
+  if (!driver.isAndroid) {
+    // iOS: el "+" es el control "txt In Cart Caption" con value="+"
+    let el: WebdriverIO.Element | undefined;
+    // El primero en pantalla (arriba a la izquierda): el orden del árbol de iOS no es el visual
+    await driver.waitUntil(async () => !!(el = await topLeft([...await $$("-ios predicate string:(value == '+' OR label == '+' OR name == '+') AND visible == 1")])),
+      { timeout: 20_000, interval: 500, timeoutMsg: 'No hay tarjetas de producto con "+"' });
+    return el!;
+  }
+  const el = await $('android=new UiSelector().text("+")');
   await el.waitForDisplayed({ timeoutMsg: 'No hay tarjetas de producto con "+"' });
   return el;
 }
 
 export async function firstMinus() {
-  const sel = driver.isAndroid ? 'android=new UiSelector().text("-")' : `-ios predicate string:label == '-' OR name == '-'`;
-  const el = await $(sel);
+  if (!driver.isAndroid) {
+    // iOS: el "-" es el control "txt In Cart Caption" con value="-"
+    let el: WebdriverIO.Element | undefined;
+    // El primero en pantalla (arriba a la izquierda): el orden del árbol de iOS no es el visual
+    await driver.waitUntil(async () => !!(el = await topLeft([...await $$("-ios predicate string:(value == '-' OR label == '-' OR name == '-') AND visible == 1")])),
+      { timeout: 20_000, interval: 500, timeoutMsg: 'La tarjeta no muestra el selector "-"' });
+    return el!;
+  }
+  const el = await $('android=new UiSelector().text("-")');
   await el.waitForDisplayed({ timeoutMsg: 'La tarjeta no muestra el selector "-"' });
   return el;
 }
@@ -464,7 +511,44 @@ export async function scrollToOrder(orderNumber: string, maxSwipes = 30) {
 }
 
 /** Completa el diálogo "Cancelar Pedido Nº X" (motivo + confirmar). */
+/**
+ * Acepta un diálogo de confirmación. Android: toca el botón por texto. iOS: es una alerta nativa (ej. "¿Confirma
+ * vaciar el carrito?" con "Cancelar" / "Si"): se toca el botón que no cancela. Devuelve false si no apareció.
+ */
+export async function acceptDialog(texts: string[], timeout = 3_000) {
+  if (driver.isAndroid) return tapTextIfVisible(texts, timeout);
+  const shown = await driver.waitUntil(async () => (await driver.getAlertText().catch(() => null)) !== null, { timeout, interval: 500 })
+    .then(() => true, () => false);
+  if (!shown) return false;
+  const buttons = await driver.execute('mobile: alert', { action: 'getButtons' }) as string[];
+  const yes = buttons.find(b => !/^(cancelar|no|cerrar)$/i.test(b.trim())) ?? buttons[buttons.length - 1];
+  await driver.execute('mobile: alert', { action: 'accept', buttonLabel: yes });
+  return true;
+}
+
 export async function confirmCancelDialog() {
+  if (driver.isIOS) {
+    // El motivo es un TextView ("Reason String") con placeholder, que iOS no expone como texto. Detrás del modal
+    // sigue la tarjeta del pedido con otro "Cancelar Pedido": se toca el que está debajo del motivo.
+    const reason = await $("-ios predicate string:type == 'XCUIElementTypeTextView' AND name == 'Reason String'");
+    await reason.waitForExist({ timeout: 15_000 });
+    await reason.click();
+    await reason.setValue('Smoke automatizado');
+    await driver.hideKeyboard().catch(() => {});
+    const r = await driver.getElementRect(reason.elementId);
+    const buttons = await $$(`-ios predicate string:type == 'XCUIElementTypeButton' AND name == '${T.cancelarPedido[0]}'`);
+    // El teclado no se cierra y sube los botones: el del diálogo es el primero debajo del motivo (el de la tarjeta
+    // de atrás queda justo debajo del "Volver" del diálogo)
+    let target: WebdriverIO.Element | undefined, targetY = Infinity;
+    for (const b of buttons) {
+      const { y } = await b.getLocation();
+      if (y > r.y + r.height && y < targetY) [target, targetY] = [b, y];
+    }
+    if (!target) throw new Error('No encontré el botón "Cancelar Pedido" del diálogo');
+    await tapElement(target);
+    await waitForLoading();
+    return;
+  }
   await findByText(T.motivoCancelacion, 10_000);
   await typeInto(await findInput(T.motivoCancelacion[0]), 'Smoke automatizado');
   // En Android hideKeyboard puede mandar BACK y cerrar la pantalla: sólo en iOS

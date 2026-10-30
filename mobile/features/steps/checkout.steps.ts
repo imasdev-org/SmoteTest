@@ -5,11 +5,11 @@ import { T } from '../../support/texts';
 import { inWebview, tapNotification } from '../../support/app';
 import {
   descOf, findAllByText, findByText, findExact, isVisibleText, px, regexSelector, scrollToText, scrollableContaining, swipeElement, tapText, tapTextIfVisible,
-  visibleTexts, waitForLoading, screenshot,
+  swipeHorizontal, visibleTexts, waitForLoading, screenshot, windowSize,
 } from '../../support/ui';
-import { enterSuperFromSelector, isWorldSelectorOpen, firstMinus, firstPlus, openCart, scrollToButton, tapButton } from '../../support/flows';
+import { acceptDialog, enterSuperFromSelector, tapElement, isWorldSelectorOpen, firstMinus, firstPlus, openCart, scrollToButton, tapButton } from '../../support/flows';
 import { ctx } from '../../support/context';
-import { orderSummary } from '../../support/products';
+import { orderSummary, screenNodes } from '../../support/products';
 
 // --- Carrito → checkout ---
 
@@ -69,21 +69,37 @@ When('elijo la fecha de entrega más lejana', async () => {
   // Avanzar el carrusel de días hasta el final
   // Carrusel de días: el scrollable que contiene los nombres de los días; se desliza sobre él
   const daysRow = await scrollableContaining(regexSelector(`^(${WEEKDAYS.join('|')})$`));
+  // iOS: después del primer gesto el elemento queda "stale": se toma la altura de la fila una vez y se desliza ahí
+  const rowY = !driver.isAndroid && daysRow ? (await daysRow.getLocation()).y + 10 : 0;
+  const { height } = await windowSize();
   let prev = '';
   for (let i = 0; i < 8 && daysRow; i++) {
     const cur = (await visibleTexts()).filter(t => WEEKDAYS.includes(t)).join('|');
     if (cur === prev) break;
     prev = cur;
-    await swipeElement(daysRow, 'left');
+    if (driver.isAndroid) await swipeElement(daysRow, 'left');
+    else await swipeHorizontal('left', rowY / height);
   }
   // Último día visible (el de más a la derecha)
-  let last: { el: WebdriverIO.Element; x: number } | undefined;
-  for (const { el } of await findAllByText(WEEKDAYS)) {
-    const { x } = await el.getLocation();
-    if (!last || x > last.x) last = { el, x };
+  if (!driver.isAndroid) {
+    // iOS: el carrusel sigue moviéndose un momento después del gesto y los elementos quedan "stale": se leen las
+    // posiciones de una sola lectura de la pantalla y se toca por coordenadas
+    await driver.pause(1_000);
+    const { width } = await windowSize();
+    const days = (await screenNodes()).filter(n => WEEKDAYS.includes(n.text.trim()) && n.x1 >= 0 && n.x2 <= width);
+    const day = days.sort((a, b) => b.x1 - a.x1)[0];
+    if (!day) throw new Error('No encontré los días de entrega');
+    await driver.action('pointer', { parameters: { pointerType: 'touch' } })
+      .move({ x: Math.round((day.x1 + day.x2) / 2), y: Math.round((day.y1 + day.y2) / 2) }).down().pause(80).up().perform();
+  } else {
+    let last: { el: WebdriverIO.Element; x: number } | undefined;
+    for (const { el } of await findAllByText(WEEKDAYS)) {
+      const { x } = await el.getLocation();
+      if (!last || x > last.x) last = { el, x };
+    }
+    // Los textos del día/horario no son clickeables (lo es su contenedor): tap por coordenadas
+    await (last!.el).click();
   }
-  // Los textos del día/horario no son clickeables (lo es su contenedor): tap por coordenadas
-  await (last!.el).click();
   await waitForLoading();
   await driver.pause(2_000); // al cambiar de día se recargan los horarios
   // Primer horario: el texto puede venir junto ("10:00 a 13:59") o separado en "10:00" / "a" / "13:59"
@@ -93,7 +109,7 @@ When('elijo la fecha de entrega más lejana', async () => {
   await (slot).click();
   await waitForLoading();
   await tapButton(T.continuar[0]);
-  if (await tapTextIfVisible(['ACEPTAR', 'Aceptar'], 2_000)) throw new Error('La app no tomó el horario ("Seleccioná un rango horario de entrega")');
+  if (await acceptDialog(['ACEPTAR', 'Aceptar'], 2_000)) throw new Error('La app no tomó el horario ("Seleccioná un rango horario de entrega")');
   const fecha = await findByText(T.fecha);
   console.log(`Fecha elegida: ${await descOf(fecha)}`);
 });
@@ -130,7 +146,7 @@ async function deleteSavedPasscard() {
   const del = (await findAllByText(T.eliminar)).find(e => e.y > card.y);
   if (!del) throw new Error('No encontré el botón Eliminar de la PASSCARD');
   await del.el.click();
-  await tapTextIfVisible(['Sí', 'Aceptar', 'Confirmar', ...T.eliminar], 3_000);
+  await acceptDialog(['Sí', 'Aceptar', 'Confirmar', ...T.eliminar], 3_000);
   await waitForLoading();
 }
 
@@ -206,33 +222,32 @@ When('elijo {int} cuotas', async (n: number) => {
   if (!(await isVisibleText(T.cuotas, 5_000))) {
     throw new Error('No aparece el selector de cuotas (¿producto no financiable o moneda incorrecta?)');
   }
+  if (!driver.isAndroid) {
+    // iOS: el combo es un texto name="Cuotas" con el valor actual (value="1"); al tocarlo abre una pantalla con la
+    // lista 1..12 y al elegir vuelve sola a "Tarjeta seleccionada"
+    const combo = () => $("-ios predicate string:name == 'Cuotas' AND value != 'Cuotas'");
+    await tapElement(await combo());
+    await tapElement(await findExact(String(n), 15_000));
+    await driver.waitUntil(async () => (await combo()).isExisting(), { timeout: 15_000, interval: 1_000 });
+    const value = (await (await combo()).getAttribute('value'))?.trim();
+    console.log(`Cuotas: ${value}`);
+    expect(value).toBe(String(n));
+    return;
+  }
   // "Cuotas" es una etiqueta; el combo (Spinner) está a la derecha con el valor actual
   const label = await scrollToText(T.cuotas);
   const labelY = (await label.getLocation()).y;
-  // iOS (sin calibrar): el combo de GeneXus es un botón / campo en la misma fila que abre un picker o una lista
-  const spinnerSel = driver.isAndroid
-    ? 'android=new UiSelector().className("android.widget.Spinner")'
-    : "-ios predicate string:type IN {'XCUIElementTypeButton', 'XCUIElementTypeTextField'}";
-  const [row, labelX] = [await px(100), (await label.getLocation()).x];
   let spinner: WebdriverIO.Element | undefined;
-  for (const sp of await $$(spinnerSel)) {
-    const loc = await sp.getLocation();
-    if (Math.abs(loc.y - labelY) < row && (driver.isAndroid || loc.x > labelX)) { spinner = sp; break; }
+  for (const sp of await $$('android=new UiSelector().className("android.widget.Spinner")')) {
+    if (Math.abs((await sp.getLocation()).y - labelY) < 100) { spinner = sp; break; }
   }
   if (!spinner) throw new Error('No encontré el combo de cuotas');
   await (spinner).click();
-  const wheel = driver.isAndroid ? undefined : await $('-ios class chain:**/XCUIElementTypePickerWheel');
-  if (wheel && await wheel.isDisplayed().catch(() => false)) {
-    await wheel.setValue(String(n));
-    await tapTextIfVisible(['Listo', 'Done', 'OK', 'Aceptar'], 2_000);
-  } else {
-    await (await findExact(String(n))).click();
-  }
+  await (await findExact(String(n))).click();
   await waitForLoading();
-  const value = driver.isAndroid ? await spinner.$('android=new UiSelector().resourceId("android:id/text1")') : spinner;
-  const current = async () => ((driver.isAndroid ? await value.getText() : (await value.getAttribute('value')) || await value.getAttribute('label')) ?? '').trim();
-  console.log(`Cuotas: ${await current().catch(() => '?')}`);
-  expect(await current()).toBe(String(n));
+  const value = await spinner.$('android=new UiSelector().resourceId("android:id/text1")');
+  console.log(`Cuotas: ${await value.getText().catch(() => '?')}`);
+  expect((await value.getText()).trim()).toBe(String(n));
 });
 
 When('confirmo el pedido', async () => {

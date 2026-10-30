@@ -6,7 +6,7 @@ import { appId, inWebview, installedVersion, restartApp } from '../../support/ap
 import { findAllByText, findByText, isVisibleNow, isVisibleText, scrollToText, tapText, tapTextIfVisible, visibleTexts, waitForLoading, screenshot, PRICE_RE } from '../../support/ui';
 import { ctx, resetCtx } from '../../support/context';
 import {
-  backToHome, openDetailFromImage, cancelAllPendingOrders, cancelOrder, cartCount, closeCart, closeMenu, closeOverlay, confirmCancelDialog, fillLogin, firstPlus, isLoggedIn,
+  acceptDialog, backToHome, openDetailFromImage, cancelAllPendingOrders, cancelOrder, cartCount, closeCart, closeMenu, closeOverlay, confirmCancelDialog, fillLogin, firstPlus, isLoggedIn,
   login, logout, openCart, waitForAppReady, openMisPedidos, orderStatus, search, tapButton,
 } from '../../support/flows';
 
@@ -17,6 +17,13 @@ Before(async () => {
   // Antes de reiniciar se prueba volver con "atrás" (búsqueda, detalle, listados): reiniciar además
   // reabre la app en el último mundo usado y obliga a cambiar de mundo (~12 s más).
   await driver.activateApp(appId());
+  // iOS: en Mis pedidos (barra nativa con "nav menu icon") cada búsqueda por texto tarda 15-85 s por la lista larga
+  // y desde ahí no hay "atrás": se reinicia directo
+  if (driver.isIOS && await $("-ios predicate string:type == 'XCUIElementTypeButton' AND name == 'nav menu icon'").isExisting()) {
+    await restartApp();
+    await waitForAppReady();
+    return;
+  }
   // Mis pedidos también dice "Entrega en" (en cada pedido) pero no tiene el logo del header
   const enHome = async () => await isVisibleNow(T.appCargada)
     && await isVisibleNow([...T.home, ...T.homeExpress, 'Prod List Title'])
@@ -83,7 +90,7 @@ Given('que entro a la app como anónimo', async () => {
 
 When('me logueo con el usuario de prueba si me lo pide', async () => {
   // Como anónimo, agregar al carrito muestra "Debe iniciar sesión para agregar al carrito" → ACEPTAR → login
-  if (await isVisibleText(T.debeIniciarSesion, 3_000)) await tapText(['ACEPTAR', 'Aceptar']);
+  if (await isVisibleText(T.debeIniciarSesion, 3_000)) await acceptDialog(['ACEPTAR', 'Aceptar'], 5_000);
   if (await isVisibleText(T.password, 5_000)) await fillLogin();
   else if (await tapTextIfVisible(T.iniciarSesion, 2_000)) await fillLogin();
 });
@@ -160,7 +167,7 @@ When('cancelo el pedido', async () => {
   if (await isVisibleText(T.motivoCancelacion, 5_000)) {
     await confirmCancelDialog();
   } else {
-    await tapTextIfVisible(['Sí', 'SI', 'Aceptar', 'ACEPTAR', 'Confirmar', ...T.cancelarPedido], 5_000);
+    await acceptDialog(['Sí', 'SI', 'Aceptar', 'ACEPTAR', 'Confirmar', ...T.cancelarPedido], 5_000);
     await waitForLoading();
   }
   await screenshot('cancelado-desde-widget');
@@ -189,12 +196,16 @@ Given('el carrito está vacío', async () => {
   if (await isVisibleText(T.topeCarrito, 1_500)) await tapText(['Quitar productos']);
   // Se abre siempre: el badge puede no haber cargado todavía al llegar a la home
   if (!(await isVisibleText(T.vaciarCarrito, 1_500))) await openCart();
-  if ((await cartCount()) > 0) {
+  // Con el panel abierto el badge del header queda corrido (en iOS cartCount da 0): vale también el aviso del panel
+  // El panel carga después de abrirse: esperar a que muestre el aviso de vacío o productos antes de decidir
+  const panelLoaded = [...T.carritoSinProductos, ...T.vaciarCarrito, ...(driver.isIOS ? ['Product Name Camel'] : [])];
+  await findByText(panelLoaded, 20_000).catch(() => {});
+  if ((await cartCount()) > 0 || !(await isVisibleNow(T.carritoSinProductos))) {
     // "Vaciar carrito" está al final de la lista de productos del panel
     await (await scrollToText(T.vaciarCarrito, 15)).click();
     // "¿Confirma vaciar el carrito?" puede tardar varios segundos en aparecer con prod lenta
-    if (await isVisibleText(['Confirma vaciar'], 15_000)) await tapText(['ACEPTAR', 'Aceptar']);
-    else await tapTextIfVisible(['Sí', 'Aceptar', 'Confirmar'], 2_000);
+    if (await isVisibleText(['Confirma vaciar'], 15_000)) await acceptDialog(['ACEPTAR', 'Aceptar'], 5_000);
+    else await acceptDialog(['Sí', 'Aceptar', 'Confirmar'], 2_000);
     await waitForLoading();
     // Vacío = el panel ya no lista productos (con el panel abierto el badge del header no se ve)
     await driver.waitUntil(async () => !(await isVisibleNow(['Product Name Camel'])), { timeout: 20_000, interval: 1_000 })
