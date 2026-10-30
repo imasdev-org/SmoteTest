@@ -41,7 +41,25 @@ async function selectSpinner(current: string, option: string) {
 
 When('elijo {string}', async (option: string) => {
   await tapText(T.lugarDeEntrega);
-  if (option === 'Click & Go') {
+  if (option === 'Click & Go' && driver.isIOS) {
+    // iOS: el tipo de retiro es un menú nativo (si se abre queda tapando todo) y región/sucursal abren
+    // una pantalla con la lista de opciones; los combos se reconocen por name y muestran el valor en value
+    await tapText(T.tabRetiro);
+    const pickup = await $("-ios predicate string:type == 'XCUIElementTypeButton' AND name == 'Handover Pickup Type'");
+    await pickup.waitForExist({ timeout: 15_000 });
+    if (!(await pickup.$(`-ios predicate string:value == '${T.clickAndGo[0]}'`).isExisting())) {
+      await tapElement(pickup);
+      await tapElement(await $(`-ios predicate string:type == 'XCUIElementTypeButton' AND name == '${T.clickAndGo[0]}' AND visible == 1`));
+    }
+    const combos: [string, string][] = [["name == 'Store Zone Id'", T.region], ["name == 'Sucursal' AND value != 'Sucursal'", T.sucursal]];
+    for (const [cond, option] of combos) {
+      const combo = await $(`-ios predicate string:type == 'XCUIElementTypeStaticText' AND ${cond}`);
+      if ((await combo.getAttribute('value')) !== T.seleccionar[0]) continue;
+      await tapElement(combo);
+      await tapElement(await findByText(option, 15_000));
+      await driver.waitUntil(async () => (await combo.getAttribute('value').catch(() => T.seleccionar[0])) !== T.seleccionar[0], { timeout: 15_000, interval: 1_000 });
+    }
+  } else if (option === 'Click & Go') {
     await tapText(T.tabRetiro);
     await tapText(T.clickAndGo);
     if (await isVisibleText(T.seleccionar, 3_000)) await selectSpinner(T.seleccionar[0], T.region);
